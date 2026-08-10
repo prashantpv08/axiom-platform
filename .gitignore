@@ -71,8 +71,6 @@ web_modules/
 .yarn-integrity
 
 # dotenv environment variable files
-.env
-.env.*
 !.env.example
 
 # Local-only Axiom credentials and session material
@@ -149,3 +147,4 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+config.bat
