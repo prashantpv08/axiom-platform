@@ -28,6 +28,11 @@ export const OrganizationResponseSchema = z.object({
 
 export type OrganizationResponse = z.infer<typeof OrganizationResponseSchema>;
 
+export const CurrentUserOrganizationsResponseSchema = z.object({
+  organizations: z.array(OrganizationResponseSchema)
+}).strict();
+export type CurrentUserOrganizationsResponse = z.infer<typeof CurrentUserOrganizationsResponseSchema>;
+
 export type Principal = {
   sessionId: string;
   userId: string;

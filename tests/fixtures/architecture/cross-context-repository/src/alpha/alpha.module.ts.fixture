@@ -1,0 +1,3 @@
+import { PostgresBetaRepository } from '../beta/postgres-beta.repository';
+
+export const repository = PostgresBetaRepository;

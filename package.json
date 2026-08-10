@@ -11,20 +11,26 @@
     "worker:once": "tsx src/worker.ts --once",
     "build": "tsc -p tsconfig.build.json",
     "lint": "eslint .",
+    "ci:policy": "./scripts/check-workflow-actions.sh",
+    "security:audit": "pnpm audit --prod --audit-level moderate && pnpm audit --audit-level high",
+    "architecture:check": "tsx scripts/check-architecture.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:contract": "vitest run tests/api-foundation.contract.test.ts",
+    "test:contract": "vitest run tests/api-foundation.contract.test.ts tests/application-error-http.contract.test.ts tests/openapi-contract.test.ts",
+    "contract:emit": "tsx scripts/openapi-contract.ts emit",
+    "contract:check": "tsx scripts/openapi-contract.ts check",
     "test:providers": "vitest run tests/generation-provider-contract.test.ts tests/hosted-generation-provider-contract.test.ts",
     "test:db": "TEST_DATABASE_URL=postgresql://axiom:axiom-local-only@localhost:54329/axiom_test vitest run tests/*-postgres.integration.test.ts --maxWorkers=1",
     "eval:tickets": "tsx scripts/evaluate-ticket-quality.ts",
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down",
     "db:migrate": "tsx scripts/db-migrate.ts",
+    "db:verify-rollbacks": "tsx scripts/verify-migration-rollbacks.ts",
     "auth:local-session": "tsx scripts/create-local-owner-session.ts",
     "billing:local-provision": "tsx scripts/provision-local-billing.ts",
     "billing:local-webhook": "tsx scripts/send-local-subscription-webhook.ts",
     "models:local-provision": "tsx scripts/provision-local-model-policy.ts",
-    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm eval:tickets && pnpm build"
+    "check": "pnpm ci:policy && pnpm security:audit && pnpm architecture:check && pnpm lint && pnpm typecheck && pnpm contract:check && pnpm test && pnpm eval:tickets && pnpm build"
   },
   "engines": {
     "node": ">=22.0.0"
@@ -55,5 +61,17 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.48.0",
     "vitest": "^4.0.15"
+  },
+  "pnpm": {
+    "overrides": {
+      "brace-expansion@<1.1.18": "1.1.18",
+      "brace-expansion@>=4.0.0 <5.0.9": "5.0.9",
+      "fast-uri@>=3.0.0 <3.1.5": "3.1.5",
+      "fast-uri@>=4.0.0 <4.1.2": "4.1.2",
+      "find-my-way@<=9.6.0": "9.7.0",
+      "js-yaml@>=4.0.0 <4.3.1": "4.3.1",
+      "js-yaml@>=5.0.0 <=5.2.1": "5.2.2",
+      "nanoid@<3.3.17": "3.3.17"
+    }
   }
 }

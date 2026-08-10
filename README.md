@@ -49,6 +49,8 @@ pnpm build
 
 Database integration tests are restricted to `axiom_test*` databases. Migration forward/rollback verification must use a disposable test database, never the local main database.
 
+Run `pnpm db:verify-rollbacks` to apply every forward migration and then every reviewed rollback in reverse order. The command creates only the exact disposable database `axiom_migration_rollback_verification`, refuses to overwrite it if it already exists, and removes it when verification finishes.
+
 ## Local utility commands
 
 ```bash

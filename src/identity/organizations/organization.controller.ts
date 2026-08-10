@@ -19,22 +19,7 @@ export class OrganizationController {
   @RequirePermission(ORGANIZATION_READ)
   @ApiOperation({ operationId: 'getOrganization', summary: 'Get an organization visible to the current member' })
   @ApiParam({ name: 'organizationId', example: 'ORG-LOCAL' })
-  @ApiOkResponse({
-    schema: {
-      type: 'object',
-      required: ['id', 'slug', 'name', 'status', 'role'],
-      properties: {
-        id: { type: 'string' },
-        slug: { type: 'string' },
-        name: { type: 'string' },
-        status: { type: 'string', enum: ['ACTIVE'] },
-        role: {
-          type: 'string',
-          enum: ['OWNER', 'ADMINISTRATOR', 'PRODUCT_ANALYST', 'ARCHITECT', 'DEVELOPER', 'REVIEWER', 'VIEWER']
-        }
-      }
-    }
-  })
+  @ApiOkResponse({ description: 'Organization visible to the current member' })
   getOrganization(
     @Param('organizationId') _organizationId: string,
     @Req() request: AuthenticatedRequest

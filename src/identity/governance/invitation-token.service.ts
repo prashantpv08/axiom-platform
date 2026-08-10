@@ -1,7 +1,8 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 
+import { ApplicationError } from '../../platform/application/application-error';
 import { InvitationTokenSchema } from './governance.schema';
 
 type InvitationTokenInput = { id: string; email: string; expiresAt: string };
@@ -11,7 +12,7 @@ export class InvitationTokenService {
   private secret(): string {
     const secret = process.env.AXIOM_INVITATION_SECRET;
     if (secret === undefined || Buffer.byteLength(secret, 'utf8') < 32) {
-      throw new ServiceUnavailableException('Invitation delivery is not configured');
+      throw new ApplicationError('UNAVAILABLE', 'Invitation delivery is not configured');
     }
     return secret;
   }

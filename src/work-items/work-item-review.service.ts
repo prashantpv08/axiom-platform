@@ -1,14 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 
 import type { OrganizationAccessContext } from '../identity/identity.schema';
+import { ApplicationError } from '../platform/application/application-error';
+import type { StrongEntityTag } from '../platform/http/entity-tag';
 import { IdempotencyKeySchema, ProjectIdSchema } from '../projects/project.schema';
 import { WorkItemGenerationIdSchema, WorkItemGenerationPreviewSchema } from './work-item-generation.schema';
-import {
-  WorkItemGenerationReviewEtagSchema,
-  SubmitWorkItemReviewRequestSchema
-} from './work-item-review.schema';
+import { SubmitWorkItemReviewRequestSchema } from './work-item-review.schema';
 import {
   WORK_ITEM_REVIEW_REPOSITORY,
   WorkItemReviewBlockedError,
@@ -27,20 +26,19 @@ export class WorkItemReviewService {
     projectIdInput: unknown,
     generationIdInput: unknown,
     body: unknown,
-    ifMatchInput: unknown,
+    ifMatch: StrongEntityTag,
     idempotencyKeyInput: unknown,
     requestId: string
   ) {
     const projectId = ProjectIdSchema.safeParse(projectIdInput);
     const generationId = WorkItemGenerationIdSchema.safeParse(generationIdInput);
     const request = SubmitWorkItemReviewRequestSchema.safeParse(body);
-    const ifMatch = WorkItemGenerationReviewEtagSchema.safeParse(ifMatchInput);
     const idempotencyKey = IdempotencyKeySchema.safeParse(idempotencyKeyInput);
-    if (!projectId.success || !generationId.success) throw new NotFoundException('Work-item generation was not found');
-    if (!request.success || !ifMatch.success || !idempotencyKey.success) throw new BadRequestException('Work-item review request is invalid');
+    if (!projectId.success || !generationId.success) throw new ApplicationError('NOT_FOUND', 'Work-item generation was not found');
+    if (!request.success || !idempotencyKey.success) throw new ApplicationError('INVALID_REQUEST', 'Work-item review request is invalid');
     const reviewContext = await this.repository.loadContext(access.organizationId, projectId.data, generationId.data);
-    if (reviewContext === null) throw new NotFoundException('Work-item generation was not found');
-    if (ifMatch.data !== `"${reviewContext.generationId}:${reviewContext.generationContentHash}"`) throw new ConflictException('The review preview is stale');
+    if (reviewContext === null) throw new ApplicationError('NOT_FOUND', 'Work-item generation was not found');
+    if (ifMatch !== `"${reviewContext.generationId}:${reviewContext.generationContentHash}"`) throw new ApplicationError('CONFLICT', 'The review preview is stale');
 
     let reviewedWorkItems: WorkItem[] = reviewContext.workItems;
     const editedWorkItemIds: string[] = [];
@@ -48,8 +46,8 @@ export class WorkItemReviewService {
       const edits = new Map(request.data.edits.map((edit) => [edit.workItemId, edit]));
       for (const edit of request.data.edits) {
         const item = reviewContext.workItems.find((candidate) => candidate.id === edit.workItemId);
-        if (item === undefined) throw new BadRequestException(`Work item ${edit.workItemId} is not part of this generation`);
-        if (item.version !== edit.expectedVersion) throw new ConflictException(`Work item ${edit.workItemId} has a stale version`);
+        if (item === undefined) throw new ApplicationError('INVALID_REQUEST', `Work item ${edit.workItemId} is not part of this generation`);
+        if (item.version !== edit.expectedVersion) throw new ApplicationError('CONFLICT', `Work item ${edit.workItemId} has a stale version`);
       }
       reviewedWorkItems = reviewContext.workItems.map((item) => {
         const edit = edits.get(item.id);
@@ -64,7 +62,7 @@ export class WorkItemReviewService {
         editedWorkItemIds.push(item.id);
         return WorkItemSchema.parse({ ...item, ...patch, version: item.version + 1 });
       });
-      if (editedWorkItemIds.length === 0) throw new BadRequestException('Accept with edits requires at least one material work-item change');
+      if (editedWorkItemIds.length === 0) throw new ApplicationError('INVALID_REQUEST', 'Accept with edits requires at least one material work-item change');
     }
 
     const batch = WorkItemBatchSchema.parse({
@@ -83,12 +81,12 @@ export class WorkItemReviewService {
     });
     if (request.data.decision !== 'REJECT' && !qualityReport.passed) {
       const codes = [...new Set(qualityReport.findings.filter((finding) => finding.severity !== 'WARNING').map((finding) => finding.code))];
-      throw new UnprocessableEntityException(`Reviewed backlog failed deterministic quality gates: ${codes.join(', ')}.`);
+      throw new ApplicationError('UNPROCESSABLE', `Reviewed backlog failed deterministic quality gates: ${codes.join(', ')}.`);
     }
     const requestHash = createHash('sha256').update(JSON.stringify({
       projectId: projectId.data,
       generationId: generationId.data,
-      ifMatch: ifMatch.data,
+      ifMatch,
       review: request.data
     }), 'utf8').digest('hex');
     try {
@@ -106,8 +104,8 @@ export class WorkItemReviewService {
       });
       return WorkItemGenerationPreviewSchema.parse(result);
     } catch (cause) {
-      if (cause instanceof WorkItemReviewConflictError) throw new ConflictException(cause.message);
-      if (cause instanceof WorkItemReviewBlockedError) throw new UnprocessableEntityException(cause.reasons.join(' '));
+      if (cause instanceof WorkItemReviewConflictError) throw new ApplicationError('CONFLICT', cause.message);
+      if (cause instanceof WorkItemReviewBlockedError) throw new ApplicationError('UNPROCESSABLE', cause.reasons.join(' '));
       throw cause;
     }
   }

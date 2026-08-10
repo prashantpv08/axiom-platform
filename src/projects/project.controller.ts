@@ -12,56 +12,15 @@ import {
   ApiResponse,
   ApiTags
 } from '@nestjs/swagger';
-import type { SchemaObject } from '@nestjs/swagger/dist/interfaces/open-api-spec.interface';
 import type { FastifyReply } from 'fastify';
 
 import { requireAccessContext, type AuthenticatedRequest } from '../identity/access/access-context';
 import { PROJECT_ARCHIVE, PROJECT_CREATE, PROJECT_READ, PROJECT_RESTORE } from '../identity/access/permissions';
 import { RequirePermission } from '../identity/access/require-permission.decorator';
+import { formatStrongEntityTag } from '../platform/http/entity-tag';
+import { parseProjectVersionPrecondition } from './project-http';
 import type { ProjectListResponse, ProjectResponse } from './project.schema';
-import { projectEtag, ProjectService } from './project.service';
-
-const projectSchema: SchemaObject = {
-  type: 'object',
-  required: [
-    'id',
-    'workspaceId',
-    'name',
-    'status',
-    'graphVersion',
-    'rowVersion',
-    'archivedAt',
-    'createdAt',
-    'updatedAt'
-  ],
-  properties: {
-    id: { type: 'string' },
-    workspaceId: { type: 'string' },
-    name: { type: 'string' },
-    status: {
-      type: 'string',
-      enum: [
-        'DRAFT',
-        'SOURCES_READY',
-        'ANALYZED',
-        'NEEDS_CLARIFICATION',
-        'DOCUMENTED',
-        'DOCUMENTS_APPROVED',
-        'DESIGN_READY',
-        'ARB_APPROVED',
-        'HLD_READY',
-        'PUBLISHED',
-        'BACKLOG_READY',
-        'ARCHIVED'
-      ]
-    },
-    graphVersion: { type: 'integer', minimum: 0 },
-    rowVersion: { type: 'integer', minimum: 1 },
-    archivedAt: { anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }] },
-    createdAt: { type: 'string', format: 'date-time' },
-    updatedAt: { type: 'string', format: 'date-time' }
-  }
-};
+import { ProjectService } from './project.service';
 
 @ApiTags('projects')
 @ApiBearerAuth('session-bearer')
@@ -78,16 +37,7 @@ export class ProjectController {
   @ApiQuery({ name: 'cursor', required: false, type: String })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 25 })
   @ApiQuery({ name: 'workspaceId', required: false, type: String })
-  @ApiOkResponse({
-    schema: {
-      type: 'object',
-      required: ['projects', 'nextCursor'],
-      properties: {
-        projects: { type: 'array', items: projectSchema },
-        nextCursor: { anyOf: [{ type: 'string' }, { type: 'null' }] }
-      }
-    }
-  })
+  @ApiOkResponse({ description: 'Authorized organization projects' })
   listProjects(
     @Req() request: AuthenticatedRequest,
     @Query() query: Record<string, unknown>
@@ -102,7 +52,7 @@ export class ProjectController {
   @ApiOperation({ operationId: 'createProject', summary: 'Create a project in an authorized organization workspace' })
   @ApiParam({ name: 'organizationId', example: 'ORG-LOCAL-DEVELOPMENT' })
   @ApiHeader({ name: 'Idempotency-Key', required: true, description: 'Stable key for safe create retries' })
-  @ApiCreatedResponse({ schema: projectSchema })
+  @ApiCreatedResponse({ description: 'Created project' })
   async createProject(
     @Req() request: AuthenticatedRequest,
     @Body() body: unknown,
@@ -115,7 +65,7 @@ export class ProjectController {
       idempotencyKey,
       request.id
     );
-    void reply.header('ETag', projectEtag(result.project));
+    void reply.header('ETag', formatStrongEntityTag(result.project.id, result.project.rowVersion));
     void reply.header('Idempotency-Replayed', String(result.replayed));
     return result.project;
   }
@@ -128,7 +78,7 @@ export class ProjectController {
   @ApiParam({ name: 'organizationId', example: 'ORG-LOCAL-DEVELOPMENT' })
   @ApiParam({ name: 'projectId', example: 'PROJ-123' })
   @ApiHeader({ name: 'If-Match', required: true, description: 'Strong project ETag returned by a project read' })
-  @ApiOkResponse({ schema: projectSchema })
+  @ApiOkResponse({ description: 'Current project' })
   @ApiResponse({ status: 412, description: 'The project row version changed' })
   @ApiResponse({ status: 428, description: 'The If-Match header is required' })
   async archiveProject(
@@ -137,14 +87,15 @@ export class ProjectController {
     @Headers('if-match') ifMatch: unknown,
     @Res({ passthrough: true }) reply: FastifyReply
   ): Promise<ProjectResponse> {
+    const precondition = parseProjectVersionPrecondition(projectId, ifMatch);
     const project = await this.projectService.changeProjectLifecycle(
       requireAccessContext(request),
-      projectId,
-      ifMatch,
+      precondition.projectId,
+      precondition.expectedRowVersion,
       request.id,
       'ARCHIVE'
     );
-    void reply.header('ETag', projectEtag(project));
+    void reply.header('ETag', formatStrongEntityTag(project.id, project.rowVersion));
     return project;
   }
 
@@ -156,7 +107,7 @@ export class ProjectController {
   @ApiParam({ name: 'organizationId', example: 'ORG-LOCAL-DEVELOPMENT' })
   @ApiParam({ name: 'projectId', example: 'PROJ-123' })
   @ApiHeader({ name: 'If-Match', required: true, description: 'Strong project ETag returned by a project read' })
-  @ApiOkResponse({ schema: projectSchema })
+  @ApiOkResponse({ description: 'Current project' })
   @ApiResponse({ status: 412, description: 'The project row version changed' })
   @ApiResponse({ status: 428, description: 'The If-Match header is required' })
   async restoreProject(
@@ -165,14 +116,15 @@ export class ProjectController {
     @Headers('if-match') ifMatch: unknown,
     @Res({ passthrough: true }) reply: FastifyReply
   ): Promise<ProjectResponse> {
+    const precondition = parseProjectVersionPrecondition(projectId, ifMatch);
     const project = await this.projectService.changeProjectLifecycle(
       requireAccessContext(request),
-      projectId,
-      ifMatch,
+      precondition.projectId,
+      precondition.expectedRowVersion,
       request.id,
       'RESTORE'
     );
-    void reply.header('ETag', projectEtag(project));
+    void reply.header('ETag', formatStrongEntityTag(project.id, project.rowVersion));
     return project;
   }
 
@@ -181,7 +133,7 @@ export class ProjectController {
   @ApiOperation({ operationId: 'getProject', summary: 'Get project metadata in an authorized organization' })
   @ApiParam({ name: 'organizationId', example: 'ORG-LOCAL-DEVELOPMENT' })
   @ApiParam({ name: 'projectId', example: 'PROJ-123' })
-  @ApiOkResponse({ schema: projectSchema })
+  @ApiOkResponse({ description: 'Current project' })
   @ApiNotFoundResponse({ description: 'The scoped project was not found' })
   async getProject(
     @Req() request: AuthenticatedRequest,
@@ -189,7 +141,7 @@ export class ProjectController {
     @Res({ passthrough: true }) reply: FastifyReply
   ): Promise<ProjectResponse> {
     const project = await this.projectService.getProject(requireAccessContext(request), projectId);
-    void reply.header('ETag', projectEtag(project));
+    void reply.header('ETag', formatStrongEntityTag(project.id, project.rowVersion));
     return project;
   }
 

@@ -60,6 +60,10 @@ export const AnalysisRunResponseSchema = z.object({
   updatedAt: z.iso.datetime()
 }).strict();
 
+export const LatestAnalysisRunResponseSchema = z.object({
+  run: AnalysisRunResponseSchema.nullable()
+}).strict();
+
 export { IdempotencyKeySchema };
 export type SourceResponse = z.infer<typeof SourceResponseSchema>;
 export type AnalysisRunResponse = z.infer<typeof AnalysisRunResponseSchema>;

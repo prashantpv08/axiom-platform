@@ -5,6 +5,7 @@ import type { FastifyReply } from 'fastify';
 import { requireAccessContext, type AuthenticatedRequest } from '../identity/access/access-context';
 import { WORK_ITEM_GENERATE, WORK_ITEM_READ } from '../identity/access/permissions';
 import { RequirePermission } from '../identity/access/require-permission.decorator';
+import { formatStrongEntityTag } from '../platform/http/entity-tag';
 import type { WorkItemGenerationPreview } from './work-item-generation.schema';
 import { WorkItemGenerationService } from './work-item-generation.service';
 
@@ -38,7 +39,7 @@ export class WorkItemGenerationController {
   ): Promise<WorkItemGenerationPreview> {
     const preview = await this.service.generate(requireAccessContext(request), projectId, body, idempotencyKey, request.id);
     void reply.header('Idempotency-Replayed', String(preview.replayed));
-    void reply.header('ETag', `"${preview.id}:${preview.contentHash}"`);
+    void reply.header('ETag', formatStrongEntityTag(preview.id, preview.contentHash));
     return preview;
   }
 }

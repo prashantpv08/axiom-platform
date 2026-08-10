@@ -1,0 +1,3 @@
+import { betaSnapshot } from '../beta/postgres-beta-snapshot.query';
+
+export const snapshot = betaSnapshot;

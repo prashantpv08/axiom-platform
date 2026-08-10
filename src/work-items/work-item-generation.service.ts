@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-import { BadGatewayException, BadRequestException, ConflictException, HttpException, Inject, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 
 import { AgentKernelOutputRejectedError, AgentKernelPolicyError, AgentKernelService } from '../agent-kernel/agent-kernel.service';
 import { ProviderGenerationError } from '../agent-kernel/generation-provider.adapter';
 import type { OrganizationAccessContext } from '../identity/identity.schema';
+import { ApplicationError } from '../platform/application/application-error';
 import { IdempotencyKeySchema, ProjectIdSchema } from '../projects/project.schema';
 import { generateFixtureWorkItems } from './fixture-work-item.generator';
 import { GenerateWorkItemsRequestSchema, WorkItemGenerationPreviewSchema } from './work-item-generation.schema';
@@ -37,20 +38,20 @@ export class WorkItemGenerationService {
 
   async latest(context: OrganizationAccessContext, projectIdInput: unknown) {
     const projectId = ProjectIdSchema.safeParse(projectIdInput);
-    if (!projectId.success) throw new NotFoundException('Work-item preview was not found');
+    if (!projectId.success) throw new ApplicationError('NOT_FOUND', 'Work-item preview was not found');
     const preview = await this.repository.latest(context.organizationId, projectId.data);
-    if (preview === null) throw new NotFoundException('Work-item preview was not found');
+    if (preview === null) throw new ApplicationError('NOT_FOUND', 'Work-item preview was not found');
     return WorkItemGenerationPreviewSchema.parse(preview);
   }
 
   async generate(context: OrganizationAccessContext, projectIdInput: unknown, body: unknown, idempotencyKeyInput: unknown, requestId: string) {
     const projectId = ProjectIdSchema.safeParse(projectIdInput);
-    if (!projectId.success) throw new NotFoundException('Project was not found');
+    if (!projectId.success) throw new ApplicationError('NOT_FOUND', 'Project was not found');
     const request = GenerateWorkItemsRequestSchema.safeParse(body);
     const idempotencyKey = IdempotencyKeySchema.safeParse(idempotencyKeyInput);
-    if (!request.success || !idempotencyKey.success) throw new BadRequestException('Work-item generation request is invalid');
+    if (!request.success || !idempotencyKey.success) throw new ApplicationError('INVALID_REQUEST', 'Work-item generation request is invalid');
     const graph = await this.repository.loadContext(context.organizationId, projectId.data);
-    if (graph === null) throw new NotFoundException('Project was not found');
+    if (graph === null) throw new ApplicationError('NOT_FOUND', 'Project was not found');
     const reasons: string[] = [];
     if (!allowedStatuses.has(graph.projectStatus)) reasons.push(`Project status ${graph.projectStatus} is not ready for backlog generation.`);
     if (graph.graphVersion !== request.data.sourceGraphVersion) reasons.push('The requested graph version is no longer current.');
@@ -61,19 +62,18 @@ export class WorkItemGenerationService {
     const approvedEntities = graph.entities.filter((entity) => entity.kind === 'REQUIREMENT' || entity.kind === 'NFR');
     if (approvedEntities.length === 0) reasons.push('The approved graph has no grounded or human-confirmed requirement or NFR.');
     if (graph.blockers.length > 0) {
-      throw new HttpException({
+      throw new ApplicationError('UNPROCESSABLE', reasons.join(' '), {
         code: 'CLARIFICATION_REQUIRED',
-        message: reasons.join(' '),
         details: WorkItemGenerationBlockedDetailsSchema.parse({ blockers: graph.blockers })
-      }, 422);
+      });
     }
-    if (reasons.length > 0) throw new UnprocessableEntityException(reasons.join(' '));
+    if (reasons.length > 0) throw new ApplicationError('UNPROCESSABLE', reasons.join(' '));
 
     let fixtureBatch: WorkItemBatch;
     try {
       fixtureBatch = generateFixtureWorkItems({ projectId: graph.projectId, projectName: graph.projectName, sourceGraphVersion: graph.graphVersion, entities: graph.entities, generatedAt: new Date().toISOString() });
     } catch (cause) {
-      throw new UnprocessableEntityException(cause instanceof Error ? cause.message : 'Fixture generation failed');
+      throw new ApplicationError('UNPROCESSABLE', cause instanceof Error ? cause.message : 'Fixture generation failed');
     }
     const generationId = `WIGEN-${randomUUID()}`;
     let execution;
@@ -109,9 +109,9 @@ export class WorkItemGenerationService {
       });
     } catch (cause) {
       if (cause instanceof AgentKernelPolicyError || cause instanceof AgentKernelOutputRejectedError) {
-        throw new UnprocessableEntityException(cause.message);
+        throw new ApplicationError('UNPROCESSABLE', cause.message);
       }
-      if (cause instanceof ProviderGenerationError) throw new BadGatewayException(cause.message);
+      if (cause instanceof ProviderGenerationError) throw new ApplicationError('UPSTREAM_FAILURE', cause.message);
       throw cause;
     }
     const { batch, qualityReport } = execution.output;
@@ -119,8 +119,8 @@ export class WorkItemGenerationService {
     try {
       return await this.repository.persist({ id: generationId, context, batch, qualityReport, provenance: execution.provenance, idempotencyKey: idempotencyKey.data, requestHash, requestId });
     } catch (cause) {
-      if (cause instanceof WorkItemGenerationConflictError) throw new ConflictException(cause.message);
-      if (cause instanceof WorkItemGenerationBlockedError) throw new UnprocessableEntityException(cause.reasons.join(' '));
+      if (cause instanceof WorkItemGenerationConflictError) throw new ApplicationError('CONFLICT', cause.message);
+      if (cause instanceof WorkItemGenerationBlockedError) throw new ApplicationError('UNPROCESSABLE', cause.reasons.join(' '));
       throw cause;
     }
   }

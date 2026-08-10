@@ -1,0 +1,5 @@
+import { currentArchitectureDecision } from '../architecture/postgres-architecture-decision.query';
+import { currentArtifactApproval } from '../artifacts/postgres-artifact-approval.query';
+import { businessContextDownstreamGate } from '../experience/postgres-business-context-gate.query';
+
+export const approvedQueries = [currentArchitectureDecision, currentArtifactApproval, businessContextDownstreamGate];

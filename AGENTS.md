@@ -8,6 +8,13 @@ The sole product, architecture-decision, implementation-status, and roadmap auth
 
 ## Rules
 
+- Apply KISS and YAGNI: build the smallest complete capability required by the current SRS and do not introduce a service, provider, flag, abstraction, or extension point without a current caller or an SRS-backed extraction trigger.
+- Apply DRY by the Rule of Three: extract the narrowest shared policy or mechanism after three equivalent implementations; keep coincidentally similar domain behavior separate.
+- Apply single responsibility and dependency inversion: domain and application policy define interfaces, while NestJS, PostgreSQL, model providers, queues, and other adapters depend inward and translate at the boundary.
+- Keep one source of truth for API contracts: authoritative Zod schemas generate the reviewed OpenAPI artifact; controllers, tests, and downstream clients must not maintain handwritten copies of request or response fields.
+- Prefer cohesive bounded-context modules to generic helpers or arbitrary file-size rules. Split a module when it has independent reasons to change or crosses an ownership boundary.
+- Fail closed at every trust boundary and cover denial, malformed input, stale concurrency, replay, organization isolation, and provider failure with regression tests.
+- Put mechanically checkable architecture rules in active lint, contract, migration, or CI checks; a prose rule without a fitness check is advisory only.
 - Keep TypeScript strict and validate external input and model output at runtime.
 - Keep domain logic independent of NestJS controllers, provider SDKs, queues, databases, and infrastructure implementations.
 - Version the HTTP API under `/api/v1` and maintain reviewed OpenAPI compatibility.
@@ -23,4 +30,4 @@ The sole product, architecture-decision, implementation-status, and roadmap auth
 
 ## Verification
 
-Run `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build` for every foundation change.
+Run `pnpm lint`, `pnpm typecheck`, `pnpm test`, relevant contract/provider/database checks, and `pnpm build` for every foundation change.

@@ -222,16 +222,16 @@ describePostgres('PostgreSQL cost governance', () => {
   it('replays identical reservation and reconciliation requests but rejects changed retries', async () => {
     const first = await reservation('idempotent-usage-001', 20);
     await expect(reservation('idempotent-usage-001', 20)).resolves.toMatchObject({ id: first.id, replayed: true });
-    await expect(reservation('idempotent-usage-001', 21)).rejects.toMatchObject({ status: 409 });
+    await expect(reservation('idempotent-usage-001', 21)).rejects.toMatchObject({ kind: 'CONFLICT' });
 
     const measurements = { reservationId: first.id, actualCreditUnits: 10, inputTokens: 10, outputTokens: 5, toolChargeMicros: 0, providerCostMicros: 3, currency: 'USD', outcome: 'SUCCEEDED' as const, retryCount: 0, fallbackUsed: false, cacheHit: false };
     await expect(billing.reconcileUsage(alphaContext, measurements, 'reconcile-first')).resolves.toMatchObject({ replayed: false });
     await expect(billing.reconcileUsage(alphaContext, measurements, 'reconcile-retry')).resolves.toMatchObject({ replayed: true });
-    await expect(billing.reconcileUsage(alphaContext, { ...measurements, inputTokens: 11 }, 'reconcile-changed')).rejects.toMatchObject({ status: 409 });
+    await expect(billing.reconcileUsage(alphaContext, { ...measurements, inputTokens: 11 }, 'reconcile-changed')).rejects.toMatchObject({ kind: 'CONFLICT' });
   });
 
   it('enforces request, organization, and reservation hard limits transactionally', async () => {
-    await expect(reservation('request-too-large', 71)).rejects.toMatchObject({ status: 402 });
+    await expect(reservation('request-too-large', 71)).rejects.toMatchObject({ kind: 'PAYMENT_REQUIRED' });
 
     const concurrent = await Promise.allSettled([
       reservation('concurrent-one', 60),
@@ -256,7 +256,7 @@ describePostgres('PostgreSQL cost governance', () => {
       retryCount: 0,
       fallbackUsed: false,
       cacheHit: false
-    }, 'over-reservation')).rejects.toMatchObject({ status: 409 });
+    }, 'over-reservation')).rejects.toMatchObject({ kind: 'CONFLICT' });
     const [unchanged] = await database.db.select().from(creditBalances).where(eq(creditBalances.id, 'BAL-ALPHA'));
     expect(unchanged).toMatchObject({ reservedCreditUnits: 60, consumedCreditUnits: 0 });
   });
@@ -265,13 +265,13 @@ describePostgres('PostgreSQL cost governance', () => {
     await expect(scopedReservation(alphaContext, 'scoped-owner-one', 60, 'PROJ-ALPHA-ONE'))
       .resolves.toMatchObject({ status: 'RESERVED', estimatedCreditUnits: 60 });
     await expect(scopedReservation(alphaContext, 'scoped-owner-user-limit', 11, 'PROJ-ALPHA-TWO'))
-      .rejects.toMatchObject({ status: 402 });
+      .rejects.toMatchObject({ kind: 'PAYMENT_REQUIRED' });
     await expect(scopedReservation(alphaSecondUserContext, 'scoped-project-limit', 21, 'PROJ-ALPHA-ONE'))
-      .rejects.toMatchObject({ status: 402 });
+      .rejects.toMatchObject({ kind: 'PAYMENT_REQUIRED' });
     await expect(scopedReservation(alphaSecondUserContext, 'scoped-second-project', 40, 'PROJ-ALPHA-TWO'))
       .resolves.toMatchObject({ status: 'RESERVED', estimatedCreditUnits: 40 });
     await expect(scopedReservation(alphaSecondUserContext, 'scoped-organization-limit', 1, 'PROJ-ALPHA-TWO'))
-      .rejects.toMatchObject({ status: 402 });
+      .rejects.toMatchObject({ kind: 'PAYMENT_REQUIRED' });
 
     const stored = await database.db.select().from(usageReservations)
       .where(eq(usageReservations.organizationId, 'ORG-ALPHA'));
@@ -363,7 +363,7 @@ describePostgres('PostgreSQL cost governance', () => {
       retryCount: 0,
       fallbackUsed: false,
       cacheHit: false
-    }, 'late-before-recovery')).rejects.toMatchObject({ status: 409 });
+    }, 'late-before-recovery')).rejects.toMatchObject({ kind: 'CONFLICT' });
 
     const before = await app!.inject({
       method: 'GET',
@@ -410,7 +410,7 @@ describePostgres('PostgreSQL cost governance', () => {
       retryCount: 0,
       fallbackUsed: false,
       cacheHit: false
-    }, 'late-reconciliation')).rejects.toMatchObject({ status: 409 });
+    }, 'late-reconciliation')).rejects.toMatchObject({ kind: 'CONFLICT' });
   });
 
   it('provides a guarded executable rollback', async () => {

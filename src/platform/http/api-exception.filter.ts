@@ -30,7 +30,11 @@ function errorCode(status: number): string {
 }
 
 function safeCode(exception: unknown, status: number): string {
-  if (exception instanceof ApplicationError) return exception.code ?? errorCode(status);
+  if (exception instanceof ApplicationError) {
+    return exception.code !== undefined && /^[A-Z][A-Z0-9_]{1,99}$/u.test(exception.code)
+      ? exception.code
+      : errorCode(status);
+  }
   if (!(exception instanceof HttpException)) return errorCode(status);
   const response = exception.getResponse();
   if (typeof response !== 'object' || response === null || !('code' in response)) return errorCode(status);

@@ -6,6 +6,8 @@ export const SubscriptionProviderCodeSchema = z.string().regex(/^[A-Z][A-Z0-9_]{
 export const SubscriptionWebhookEventIdSchema = z.string().regex(/^SWE-[A-Za-z0-9_-]{1,124}$/u);
 export const ExternalProviderIdSchema = z.string().trim().min(1).max(200);
 export const SubscriptionStatusSchema = z.enum(['TRIALING', 'ACTIVE', 'PAST_DUE', 'CANCELED', 'EXPIRED']);
+export const SUBSCRIPTION_WEBHOOK_SIGNATURE_PATTERN = /^t=([0-9]{10}),v1=([a-f0-9]{64})$/u;
+export const SubscriptionWebhookSignatureSchema = z.string().regex(SUBSCRIPTION_WEBHOOK_SIGNATURE_PATTERN);
 
 export const SubscriptionProviderEventSchema = z.object({
   externalEventId: ExternalProviderIdSchema,

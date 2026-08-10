@@ -5,12 +5,12 @@ import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 
 import type { AxiomDatabase } from '../database/client';
 import { DATABASE } from '../database/database.module';
+import { claimPostgresIdempotency, completePostgresIdempotency } from '../database/idempotency/postgres-idempotency';
 import { currentArtifactApproval } from '../artifacts/postgres-artifact-approval.query';
 import { currentArchitectureDecision } from '../architecture/postgres-architecture-decision.query';
 import {
   agentRuns,
   auditEvents,
-  idempotencyRecords,
   knowledgeEntities,
   modelCalls,
   projectGaps,
@@ -111,25 +111,15 @@ export class PostgresWorkItemReviewRepository implements WorkItemReviewRepositor
   async persist(input: PersistWorkItemReviewInput): Promise<WorkItemGenerationPreview> {
     return this.database.transaction(async (transaction) => {
       const reviewedAt = new Date().toISOString();
-      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
-      const [reservation] = await transaction.insert(idempotencyRecords).values({
-        id: `IDEMP-${randomUUID()}`,
+      const reservation = await claimPostgresIdempotency(transaction, {
         organizationId: input.context.organizationId,
         scope: 'WORK_ITEM_REVIEW',
         key: input.idempotencyKey,
-        requestHash: input.requestHash,
-        expiresAt
-      }).onConflictDoNothing().returning({ id: idempotencyRecords.id });
-      if (reservation === undefined) {
-        const [existing] = await transaction.select().from(idempotencyRecords).where(and(
-          eq(idempotencyRecords.organizationId, input.context.organizationId),
-          eq(idempotencyRecords.scope, 'WORK_ITEM_REVIEW'),
-          eq(idempotencyRecords.key, input.idempotencyKey)
-        )).limit(1).for('update');
-        if (existing === undefined || existing.requestHash !== input.requestHash) throw new WorkItemReviewConflictError('Idempotency key was used for another review request');
-        if (existing.status === 'COMPLETED' && existing.responsePayload !== null) return WorkItemGenerationPreviewSchema.parse({ ...existing.responsePayload, replayed: true });
-        throw new WorkItemReviewConflictError('Review with this idempotency key is still processing');
-      }
+        requestHash: input.requestHash
+      });
+      if (reservation.kind === 'HASH_CONFLICT') throw new WorkItemReviewConflictError('Idempotency key was used for another review request');
+      if (reservation.kind === 'REPLAY') return WorkItemGenerationPreviewSchema.parse({ ...reservation.responsePayload, replayed: true });
+      if (reservation.kind === 'IN_PROGRESS') throw new WorkItemReviewConflictError('Review with this idempotency key is still processing');
 
       const [project] = await transaction.select({ graphVersion: projects.graphVersion }).from(projects).where(and(
         eq(projects.organizationId, input.context.organizationId),
@@ -286,7 +276,7 @@ export class PostgresWorkItemReviewRepository implements WorkItemReviewRepositor
           sessionId: input.context.sessionId
         }
       });
-      await transaction.update(idempotencyRecords).set({ status: 'COMPLETED', responseStatus: 201, responsePayload: preview, updatedAt: reviewedAt }).where(eq(idempotencyRecords.id, reservation.id));
+      await completePostgresIdempotency(transaction, { recordId: reservation.recordId, responseStatus: 201, responsePayload: preview, completedAt: reviewedAt });
       return preview;
     });
   }

@@ -1,4 +1,6 @@
-import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, UnauthorizedException, UnprocessableEntityException } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
+
+import { ApplicationError } from '../platform/application/application-error';
 
 import {
   SUBSCRIPTION_PROVIDER_ADAPTER,
@@ -33,14 +35,14 @@ export class SubscriptionWebhookService {
         requestId
       });
       if (!result.ok) {
-        throw new UnprocessableEntityException(`Subscription webhook could not be applied: ${result.code}`);
+        throw new ApplicationError('UNPROCESSABLE', `Subscription webhook could not be applied: ${result.code}`);
       }
       return result.receipt;
     } catch (cause) {
-      if (cause instanceof SubscriptionWebhookUnavailableError) throw new NotFoundException(cause.message);
-      if (cause instanceof SubscriptionWebhookAuthenticationError) throw new UnauthorizedException(cause.message);
-      if (cause instanceof SubscriptionWebhookPayloadError) throw new BadRequestException(cause.message);
-      if (cause instanceof SubscriptionWebhookConflictError) throw new ConflictException(cause.message);
+      if (cause instanceof SubscriptionWebhookUnavailableError) throw new ApplicationError('NOT_FOUND', cause.message);
+      if (cause instanceof SubscriptionWebhookAuthenticationError) throw new ApplicationError('UNAUTHENTICATED', cause.message);
+      if (cause instanceof SubscriptionWebhookPayloadError) throw new ApplicationError('INVALID_REQUEST', cause.message);
+      if (cause instanceof SubscriptionWebhookConflictError) throw new ApplicationError('CONFLICT', cause.message);
       throw cause;
     }
   }

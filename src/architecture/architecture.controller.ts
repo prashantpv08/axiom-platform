@@ -5,7 +5,8 @@ import type { FastifyReply } from 'fastify';
 import { requireAccessContext, type AuthenticatedRequest } from '../identity/access/access-context';
 import { ARCHITECTURE_APPROVE, ARCHITECTURE_GENERATE, PROJECT_READ } from '../identity/access/permissions';
 import { RequirePermission } from '../identity/access/require-permission.decorator';
-import { projectEtag } from '../projects/project.service';
+import { formatStrongEntityTag } from '../platform/http/entity-tag';
+import { parseProjectVersionPrecondition } from '../projects/project-http';
 import { ArchitectureService } from './architecture.service';
 
 @ApiTags('architecture')
@@ -29,8 +30,9 @@ export class ArchitectureController {
   @ApiHeader({ name: 'Idempotency-Key', required: true })
   @ApiOperation({ operationId: 'generateArchitectureOptions', summary: 'Compile and persist versioned current-graph architecture options' })
   async generate(@Req() request: AuthenticatedRequest, @Param('projectId') projectId: string, @Body() body: unknown, @Headers('if-match') ifMatch: unknown, @Headers('idempotency-key') idempotencyKey: unknown, @Res({ passthrough: true }) reply: FastifyReply) {
-    const result = await this.service.generate(requireAccessContext(request), projectId, body, ifMatch, idempotencyKey, request.id);
-    void reply.header('ETag', projectEtag(result.project)); void reply.header('Idempotency-Replayed', String(result.replayed)); return result;
+    const precondition = parseProjectVersionPrecondition(projectId, ifMatch);
+    const result = await this.service.generate(requireAccessContext(request), precondition.projectId, body, precondition.expectedRowVersion, idempotencyKey, request.id);
+    void reply.header('ETag', formatStrongEntityTag(result.project.id, result.project.rowVersion)); void reply.header('Idempotency-Replayed', String(result.replayed)); return result;
   }
 
   @Post('decisions')
@@ -41,7 +43,8 @@ export class ArchitectureController {
   @ApiHeader({ name: 'Idempotency-Key', required: true })
   @ApiOperation({ operationId: 'approveArchitectureDecision', summary: 'Approve one exact option and compile the versioned ADR and HLD' })
   async approve(@Req() request: AuthenticatedRequest, @Param('projectId') projectId: string, @Body() body: unknown, @Headers('if-match') ifMatch: unknown, @Headers('idempotency-key') idempotencyKey: unknown, @Res({ passthrough: true }) reply: FastifyReply) {
-    const result = await this.service.approve(requireAccessContext(request), projectId, body, ifMatch, idempotencyKey, request.id);
-    void reply.header('ETag', projectEtag(result.project)); void reply.header('Idempotency-Replayed', String(result.replayed)); return result;
+    const precondition = parseProjectVersionPrecondition(projectId, ifMatch);
+    const result = await this.service.approve(requireAccessContext(request), precondition.projectId, body, precondition.expectedRowVersion, idempotencyKey, request.id);
+    void reply.header('ETag', formatStrongEntityTag(result.project.id, result.project.rowVersion)); void reply.header('Idempotency-Replayed', String(result.replayed)); return result;
   }
 }

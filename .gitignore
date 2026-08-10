@@ -6,6 +6,11 @@ yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
@@ -69,6 +74,9 @@ web_modules/
 .env
 .env.*
 !.env.example
+
+# Local-only Axiom credentials and session material
+/.local/
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache

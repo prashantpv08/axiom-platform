@@ -1,0 +1,3 @@
+import { idempotencyRecords } from '../database/schema';
+
+export const records = idempotencyRecords;

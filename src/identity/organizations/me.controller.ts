@@ -3,12 +3,11 @@ import { ApiBearerAuth, ApiCookieAuth, ApiOkResponse, ApiOperation, ApiTags } fr
 
 import { requirePrincipal, type AuthenticatedRequest } from '../access/access-context';
 import { Authenticated } from '../access/authenticated.decorator';
-import type { OrganizationResponse } from '../identity.schema';
+import {
+  CurrentUserOrganizationsResponseSchema,
+  type CurrentUserOrganizationsResponse
+} from '../identity.schema';
 import { OrganizationService } from './organization.service';
-
-type CurrentUserOrganizationsResponse = {
-  organizations: OrganizationResponse[];
-};
 
 @ApiTags('identity')
 @ApiBearerAuth('session-bearer')
@@ -24,45 +23,13 @@ export class MeController {
     operationId: 'listCurrentUserOrganizations',
     summary: 'List active organizations for the authenticated user'
   })
-  @ApiOkResponse({
-    schema: {
-      type: 'object',
-      required: ['organizations'],
-      properties: {
-        organizations: {
-          type: 'array',
-          items: {
-            type: 'object',
-            required: ['id', 'slug', 'name', 'status', 'role'],
-            properties: {
-              id: { type: 'string' },
-              slug: { type: 'string' },
-              name: { type: 'string' },
-              status: { type: 'string', enum: ['ACTIVE'] },
-              role: {
-                type: 'string',
-                enum: [
-                  'OWNER',
-                  'ADMINISTRATOR',
-                  'PRODUCT_ANALYST',
-                  'ARCHITECT',
-                  'DEVELOPER',
-                  'REVIEWER',
-                  'VIEWER'
-                ]
-              }
-            }
-          }
-        }
-      }
-    }
-  })
+  @ApiOkResponse({ description: 'Active organizations for the authenticated user' })
   async listOrganizations(@Req() request: AuthenticatedRequest): Promise<CurrentUserOrganizationsResponse> {
-    return {
+    return CurrentUserOrganizationsResponseSchema.parse({
       organizations: await this.organizationService.listCurrentUserOrganizations(
         requirePrincipal(request),
         request.id
       )
-    };
+    });
   }
 }

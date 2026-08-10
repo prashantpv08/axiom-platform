@@ -5,9 +5,10 @@ import type { FastifyReply } from 'fastify';
 import { requireAccessContext, type AuthenticatedRequest } from '../identity/access/access-context';
 import { CLARIFICATION_ANSWER } from '../identity/access/permissions';
 import { RequirePermission } from '../identity/access/require-permission.decorator';
+import { formatStrongEntityTag } from '../platform/http/entity-tag';
 import type { ClarificationAnswerResponse } from './clarification.schema';
 import { ClarificationService } from './clarification.service';
-import { projectEtag } from './project.service';
+import { parseProjectVersionPrecondition } from './project-http';
 
 @ApiTags('clarifications')
 @ApiBearerAuth('session-bearer')
@@ -39,16 +40,17 @@ export class ClarificationController {
     @Headers('idempotency-key') idempotencyKey: unknown,
     @Res({ passthrough: true }) reply: FastifyReply
   ): Promise<ClarificationAnswerResponse> {
+    const precondition = parseProjectVersionPrecondition(projectId, ifMatch);
     const result = await this.clarificationService.answer(
       requireAccessContext(request),
-      projectId,
+      precondition.projectId,
       questionId,
       body,
-      ifMatch,
+      precondition.expectedRowVersion,
       idempotencyKey,
       request.id
     );
-    void reply.header('ETag', projectEtag(result.project));
+    void reply.header('ETag', formatStrongEntityTag(result.project.id, result.project.rowVersion));
     void reply.header('Idempotency-Replayed', String(result.replayed));
     return result;
   }

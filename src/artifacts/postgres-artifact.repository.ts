@@ -5,11 +5,11 @@ import { and, asc, desc, eq, sql } from 'drizzle-orm';
 
 import type { AxiomDatabase } from '../database/client';
 import { DATABASE } from '../database/database.module';
+import { claimPostgresIdempotency, completePostgresIdempotency } from '../database/idempotency/postgres-idempotency';
 import {
   auditEvents,
   clarificationQuestions,
   documentApprovals,
-  idempotencyRecords,
   knowledgeEntities,
   projectDocuments,
   projectGaps,
@@ -120,20 +120,15 @@ export class PostgresArtifactRepository implements ArtifactRepository {
 
   async generate(input: ArtifactMutationInput) {
     return this.database.transaction(async (transaction) => {
-      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
-      const [reservation] = await transaction.insert(idempotencyRecords).values({
-        id: `IDEMP-${randomUUID()}`, organizationId: input.context.organizationId, scope: 'ARTIFACT_GENERATE',
-        key: input.idempotencyKey, requestHash: input.requestHash, expiresAt
-      }).onConflictDoNothing().returning({ id: idempotencyRecords.id });
-      if (reservation === undefined) {
-        const [existing] = await transaction.select().from(idempotencyRecords).where(and(
-          eq(idempotencyRecords.organizationId, input.context.organizationId),
-          eq(idempotencyRecords.scope, 'ARTIFACT_GENERATE'), eq(idempotencyRecords.key, input.idempotencyKey)
-        )).limit(1).for('update');
-        if (existing === undefined || existing.requestHash !== input.requestHash) throw new ArtifactConflictError('Idempotency key was used for another artifact generation');
-        if (existing.status === 'COMPLETED' && existing.responsePayload !== null) return ArtifactGenerationResponseSchema.parse({ ...existing.responsePayload, replayed: true });
-        throw new ArtifactConflictError('Artifact generation with this idempotency key is still processing');
-      }
+      const reservation = await claimPostgresIdempotency(transaction, {
+        organizationId: input.context.organizationId,
+        scope: 'ARTIFACT_GENERATE',
+        key: input.idempotencyKey,
+        requestHash: input.requestHash
+      });
+      if (reservation.kind === 'HASH_CONFLICT') throw new ArtifactConflictError('Idempotency key was used for another artifact generation');
+      if (reservation.kind === 'REPLAY') return ArtifactGenerationResponseSchema.parse({ ...reservation.responsePayload, replayed: true });
+      if (reservation.kind === 'IN_PROGRESS') throw new ArtifactConflictError('Artifact generation with this idempotency key is still processing');
 
       const [project] = await transaction.select().from(projects).where(and(
         eq(projects.organizationId, input.context.organizationId), eq(projects.id, input.projectId)
@@ -192,27 +187,22 @@ export class PostgresArtifactRepository implements ArtifactRepository {
         action: 'REQUIREMENT_BASELINE_GENERATED', targetType: 'Project', targetId: input.projectId, requestId: input.requestId,
         metadata: { graphVersion: input.sourceGraphVersion, artifactHashes: Object.fromEntries(artifacts.map((artifact) => [artifact.type, artifact.sha256])), compilerVersion: artifacts[0]?.provenance.compilerVersion, sessionId: input.context.sessionId }
       });
-      await transaction.update(idempotencyRecords).set({ status: 'COMPLETED', responseStatus: 201, responsePayload: response, updatedAt: generatedAt }).where(eq(idempotencyRecords.id, reservation.id));
+      await completePostgresIdempotency(transaction, { recordId: reservation.recordId, responseStatus: 201, responsePayload: response, completedAt: generatedAt });
       return response;
     });
   }
 
   async approve(input: ArtifactApprovalInput) {
     return this.database.transaction(async (transaction) => {
-      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
-      const [reservation] = await transaction.insert(idempotencyRecords).values({
-        id: `IDEMP-${randomUUID()}`, organizationId: input.context.organizationId, scope: 'ARTIFACT_APPROVE',
-        key: input.idempotencyKey, requestHash: input.requestHash, expiresAt
-      }).onConflictDoNothing().returning({ id: idempotencyRecords.id });
-      if (reservation === undefined) {
-        const [existing] = await transaction.select().from(idempotencyRecords).where(and(
-          eq(idempotencyRecords.organizationId, input.context.organizationId),
-          eq(idempotencyRecords.scope, 'ARTIFACT_APPROVE'), eq(idempotencyRecords.key, input.idempotencyKey)
-        )).limit(1).for('update');
-        if (existing === undefined || existing.requestHash !== input.requestHash) throw new ArtifactConflictError('Idempotency key was used for another artifact approval');
-        if (existing.status === 'COMPLETED' && existing.responsePayload !== null) return ArtifactApprovalResponseSchema.parse({ ...existing.responsePayload, replayed: true });
-        throw new ArtifactConflictError('Artifact approval with this idempotency key is still processing');
-      }
+      const reservation = await claimPostgresIdempotency(transaction, {
+        organizationId: input.context.organizationId,
+        scope: 'ARTIFACT_APPROVE',
+        key: input.idempotencyKey,
+        requestHash: input.requestHash
+      });
+      if (reservation.kind === 'HASH_CONFLICT') throw new ArtifactConflictError('Idempotency key was used for another artifact approval');
+      if (reservation.kind === 'REPLAY') return ArtifactApprovalResponseSchema.parse({ ...reservation.responsePayload, replayed: true });
+      if (reservation.kind === 'IN_PROGRESS') throw new ArtifactConflictError('Artifact approval with this idempotency key is still processing');
       const [project] = await transaction.select().from(projects).where(and(
         eq(projects.organizationId, input.context.organizationId), eq(projects.id, input.projectId)
       )).limit(1).for('update');
@@ -253,7 +243,7 @@ export class PostgresArtifactRepository implements ArtifactRepository {
         action: 'REQUIREMENT_BASELINE_APPROVED', targetType: 'DocumentApproval', targetId: approval.id, requestId: input.requestId,
         metadata: { projectId: input.projectId, graphVersion: input.sourceGraphVersion, documentHashes: input.documentHashes, commentHash: createHash('sha256').update(input.comment, 'utf8').digest('hex'), sessionId: input.context.sessionId }
       });
-      await transaction.update(idempotencyRecords).set({ status: 'COMPLETED', responseStatus: 201, responsePayload: response, updatedAt: approvedAt }).where(eq(idempotencyRecords.id, reservation.id));
+      await completePostgresIdempotency(transaction, { recordId: reservation.recordId, responseStatus: 201, responsePayload: response, completedAt: approvedAt });
       return response;
     });
   }

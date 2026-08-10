@@ -1,0 +1,6 @@
+import OpenAI from 'openai';
+
+import { OrdersController } from './orders.controller';
+import { PostgresOrdersRepository } from './postgres-orders.repository';
+
+export const forbiddenDependencies = [OpenAI, OrdersController, PostgresOrdersRepository];

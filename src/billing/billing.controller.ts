@@ -5,7 +5,9 @@ import type { FastifyReply } from 'fastify';
 import { requireAccessContext, type AuthenticatedRequest } from '../identity/access/access-context';
 import { BILLING_MANAGE, BILLING_READ } from '../identity/access/permissions';
 import { RequirePermission } from '../identity/access/require-permission.decorator';
-import { BillingService, budgetPolicyEtag } from './billing.service';
+import { formatStrongEntityTag, parseRequiredVersionIfMatch } from '../platform/http/entity-tag';
+import { BudgetPolicyIdSchema } from './billing.schema';
+import { BillingService } from './billing.service';
 
 @ApiTags('billing')
 @ApiBearerAuth('session-bearer')
@@ -38,15 +40,21 @@ export class BillingController {
     @Headers('idempotency-key') idempotencyKey: unknown,
     @Res({ passthrough: true }) reply: FastifyReply
   ) {
+    const expectedRowVersion = parseRequiredVersionIfMatch(
+      ifMatch,
+      policyId,
+      'If-Match header is invalid for this budget policy',
+      (candidate) => BudgetPolicyIdSchema.safeParse(candidate).success
+    );
     const policy = await this.billingService.updatePolicy(
       requireAccessContext(request),
       body,
       policyId,
-      ifMatch,
+      expectedRowVersion,
       idempotencyKey,
       request.id
     );
-    void reply.header('ETag', budgetPolicyEtag(policy));
+    void reply.header('ETag', formatStrongEntityTag(policy.id, policy.rowVersion));
     void reply.header('Idempotency-Replayed', String(policy.replayed));
     return policy;
   }

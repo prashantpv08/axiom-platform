@@ -21,29 +21,7 @@ export class WorkspaceController {
   @ApiParam({ name: 'organizationId', example: 'ORG-LOCAL-DEVELOPMENT' })
   @ApiQuery({ name: 'cursor', required: false, type: String })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 100 })
-  @ApiOkResponse({
-    schema: {
-      type: 'object',
-      required: ['workspaces', 'nextCursor'],
-      properties: {
-        workspaces: {
-          type: 'array',
-          items: {
-            type: 'object',
-            required: ['id', 'name', 'rowVersion', 'createdAt', 'updatedAt'],
-            properties: {
-              id: { type: 'string' },
-              name: { type: 'string' },
-              rowVersion: { type: 'integer', minimum: 1 },
-              createdAt: { type: 'string', format: 'date-time' },
-              updatedAt: { type: 'string', format: 'date-time' }
-            }
-          }
-        },
-        nextCursor: { anyOf: [{ type: 'string' }, { type: 'null' }] }
-      }
-    }
-  })
+  @ApiOkResponse({ description: 'Authorized organization workspaces' })
   listWorkspaces(
     @Req() request: AuthenticatedRequest,
     @Query() query: Record<string, unknown>

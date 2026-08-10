@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-import { BadGatewayException, BadRequestException, ConflictException, HttpException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 
 import { AgentKernelOutputRejectedError, AgentKernelPolicyError, AgentKernelService } from '../agent-kernel/agent-kernel.service';
 import { ProviderGenerationError } from '../agent-kernel/generation-provider.adapter';
 import type { OrganizationAccessContext } from '../identity/identity.schema';
+import { ApplicationError } from '../platform/application/application-error';
 import { IdempotencyKeySchema, ProjectIdSchema } from '../projects/project.schema';
 import { evaluateEngineeringPlan } from './engineering-plan.evaluator';
 import {
@@ -35,30 +36,30 @@ export class EngineeringPlanService {
 
   async latest(context: OrganizationAccessContext, projectIdInput: unknown) {
     const projectId = ProjectIdSchema.safeParse(projectIdInput);
-    if (!projectId.success) throw new NotFoundException('Engineering Plan was not found');
+    if (!projectId.success) throw new ApplicationError('NOT_FOUND', 'Engineering Plan was not found');
     const preview = await this.repository.latest(context.organizationId, projectId.data);
-    if (preview === null) throw new NotFoundException('Engineering Plan was not found');
+    if (preview === null) throw new ApplicationError('NOT_FOUND', 'Engineering Plan was not found');
     return EngineeringPlanPreviewSchema.parse(preview);
   }
 
   async generate(context: OrganizationAccessContext, projectIdInput: unknown, body: unknown, idempotencyKeyInput: unknown, requestId: string) {
     const projectId = ProjectIdSchema.safeParse(projectIdInput);
-    if (!projectId.success) throw new NotFoundException('Project was not found');
+    if (!projectId.success) throw new ApplicationError('NOT_FOUND', 'Project was not found');
     const request = GenerateEngineeringPlanRequestSchema.safeParse(body);
     const idempotencyKey = IdempotencyKeySchema.safeParse(idempotencyKeyInput);
-    if (!request.success || !idempotencyKey.success) throw new BadRequestException('Engineering Plan request is invalid');
+    if (!request.success || !idempotencyKey.success) throw new ApplicationError('INVALID_REQUEST', 'Engineering Plan request is invalid');
     const source = await this.repository.loadContext(context.organizationId, projectId.data);
-    if (source === null) throw new NotFoundException('Project was not found');
+    if (source === null) throw new ApplicationError('NOT_FOUND', 'Project was not found');
     const reasons = [...source.blockingReasons];
     if (!allowedStatuses.has(source.projectStatus)) reasons.push(`Project status ${source.projectStatus} is not ready for Engineering Plan generation.`);
     if (source.graphVersion !== request.data.sourceGraphVersion) reasons.push('The requested graph version is no longer current.');
     if (source.entities.length === 0) reasons.push('The approved graph has no grounded or human-confirmed engineering context.');
     if (source.artifactApprovalId === null) reasons.push('The current graph has no exact current-artifact approval.');
     if (source.architectureDecisionId === null || source.selectedOption === null) reasons.push('The current graph has no exact latest-generation architecture decision.');
-    if (reasons.length > 0) throw new HttpException({ code: 'ENGINEERING_PLAN_BLOCKED', message: reasons.join(' '), details: { reasons } }, 422);
+    if (reasons.length > 0) throw new ApplicationError('UNPROCESSABLE', reasons.join(' '), { code: 'ENGINEERING_PLAN_BLOCKED', details: { reasons } });
 
     if (source.artifactApprovalId === null || source.architectureDecisionId === null || source.selectedOption === null) {
-      throw new HttpException({ code: 'ENGINEERING_PLAN_BLOCKED', message: 'The approved engineering baseline is incomplete.' }, 422);
+      throw new ApplicationError('UNPROCESSABLE', 'The approved engineering baseline is incomplete.', { code: 'ENGINEERING_PLAN_BLOCKED' });
     }
     const planContext: EngineeringPlanContext = {
       projectId: source.projectId,
@@ -87,7 +88,7 @@ export class EngineeringPlanService {
       const replay = await this.repository.reserve(context.organizationId, idempotencyKey.data, requestHash);
       if (replay !== null) return replay;
     } catch (cause) {
-      if (cause instanceof EngineeringPlanConflictError) throw new ConflictException(cause.message);
+      if (cause instanceof EngineeringPlanConflictError) throw new ApplicationError('CONFLICT', cause.message);
       throw cause;
     }
 
@@ -134,8 +135,8 @@ export class EngineeringPlanService {
       });
     } catch (cause) {
       await this.repository.release(context.organizationId, idempotencyKey.data, requestHash);
-      if (cause instanceof AgentKernelPolicyError || cause instanceof AgentKernelOutputRejectedError) throw new HttpException({ code: 'ENGINEERING_PLAN_REJECTED', message: cause.message }, 422);
-      if (cause instanceof ProviderGenerationError) throw new BadGatewayException(cause.message);
+      if (cause instanceof AgentKernelPolicyError || cause instanceof AgentKernelOutputRejectedError) throw new ApplicationError('UNPROCESSABLE', cause.message, { code: 'ENGINEERING_PLAN_REJECTED' });
+      if (cause instanceof ProviderGenerationError) throw new ApplicationError('UPSTREAM_FAILURE', cause.message);
       throw cause;
     }
     try {
@@ -150,9 +151,9 @@ export class EngineeringPlanService {
         requestId
       });
     } catch (cause) {
-      if (cause instanceof EngineeringPlanConflictError) throw new ConflictException(cause.message);
+      if (cause instanceof EngineeringPlanConflictError) throw new ApplicationError('CONFLICT', cause.message);
       await this.repository.release(context.organizationId, idempotencyKey.data, requestHash);
-      if (cause instanceof EngineeringPlanBlockedError) throw new HttpException({ code: 'ENGINEERING_PLAN_BLOCKED', message: cause.reasons.join(' '), details: { reasons: cause.reasons } }, 422);
+      if (cause instanceof EngineeringPlanBlockedError) throw new ApplicationError('UNPROCESSABLE', cause.reasons.join(' '), { code: 'ENGINEERING_PLAN_BLOCKED', details: { reasons: cause.reasons } });
       throw cause;
     }
   }

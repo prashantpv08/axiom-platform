@@ -9,6 +9,7 @@ export const CreditBalanceIdSchema = z.string().regex(/^BAL-[A-Za-z0-9_-]{1,124}
 export const UsageReservationIdSchema = z.string().regex(/^URES-[A-Za-z0-9_-]{1,123}$/u);
 export const UsageLedgerEntryIdSchema = z.string().regex(/^ULED-[A-Za-z0-9_-]{1,123}$/u);
 export const BudgetPolicyIdSchema = z.string().regex(/^BPOL-[A-Za-z0-9_-]{1,123}$/u);
+export const BillingIdempotencyKeySchema = z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/u);
 export const ProductCreditUnitsSchema = z.number().int().min(0).max(2_000_000_000);
 export const CurrencySchema = z.string().regex(/^[A-Z]{3}$/u);
 export const UsageOutcomeSchema = z.enum(['SUCCEEDED', 'FAILED', 'CANCELLED', 'CACHED']);

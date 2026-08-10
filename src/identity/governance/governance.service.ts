@@ -1,15 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-import {
-  BadRequestException,
-  ConflictException,
-  HttpException,
-  HttpStatus,
-  Inject,
-  Injectable,
-  NotFoundException
-} from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 
+import { ApplicationError } from '../../platform/application/application-error';
 import type { OrganizationAccessContext, Principal } from '../identity.schema';
 import {
   AcceptInvitationRequestSchema,
@@ -33,6 +26,7 @@ import {
 } from './governance.repository';
 import {
   INVITATION_DELIVERY_ADAPTER,
+  InvitationDeliveryUnavailableError,
   type InvitationDeliveryAdapter
 } from './invitation-delivery.adapter';
 import { InvitationTokenService } from './invitation-token.service';
@@ -47,23 +41,8 @@ function decodeCursor(value: string): GovernanceCursor {
   try {
     return GovernanceCursorSchema.parse(JSON.parse(Buffer.from(value, 'base64url').toString('utf8')));
   } catch {
-    throw new BadRequestException('Governance cursor is invalid');
+    throw new ApplicationError('INVALID_REQUEST', 'Governance cursor is invalid');
   }
-}
-
-function expectedInvitationRowVersion(value: unknown, invitationId: string): number {
-  if (value === undefined) throw new HttpException('If-Match header is required', 428);
-  if (typeof value !== 'string') throw new BadRequestException('If-Match header is invalid for this invitation');
-  const match = /^"(INV-[A-Za-z0-9_-]{1,124}):([1-9][0-9]*)"$/u.exec(value);
-  const version = match === null ? Number.NaN : Number(match[2]);
-  if (match === null || match[1] !== invitationId || !Number.isSafeInteger(version)) {
-    throw new BadRequestException('If-Match header is invalid for this invitation');
-  }
-  return version;
-}
-
-export function invitationEtag(invitation: { id: string; rowVersion: number }): string {
-  return `"${invitation.id}:${invitation.rowVersion}"`;
 }
 
 @Injectable()
@@ -76,7 +55,7 @@ export class GovernanceService {
 
   async listMembers(context: OrganizationAccessContext, input: unknown) {
     const query = GovernanceListQuerySchema.safeParse(input);
-    if (!query.success) throw new BadRequestException('Member list query is invalid');
+    if (!query.success) throw new ApplicationError('INVALID_REQUEST', 'Member list query is invalid');
     const page = await this.repository.listMembers(context.organizationId, {
       limit: query.data.limit,
       ...(query.data.cursor === undefined ? {} : { cursor: decodeCursor(query.data.cursor) })
@@ -90,7 +69,7 @@ export class GovernanceService {
 
   async listInvitations(context: OrganizationAccessContext, input: unknown) {
     const query = GovernanceListQuerySchema.safeParse(input);
-    if (!query.success) throw new BadRequestException('Invitation list query is invalid');
+    if (!query.success) throw new ApplicationError('INVALID_REQUEST', 'Invitation list query is invalid');
     const page = await this.repository.listInvitations(context.organizationId, {
       limit: query.data.limit,
       ...(query.data.cursor === undefined ? {} : { cursor: decodeCursor(query.data.cursor) })
@@ -111,9 +90,14 @@ export class GovernanceService {
     const request = CreateInvitationRequestSchema.safeParse(input);
     const idempotencyKey = GovernanceIdempotencyKeySchema.safeParse(idempotencyKeyInput);
     if (!request.success || !idempotencyKey.success) {
-      throw new BadRequestException('Invitation creation request is invalid');
+      throw new ApplicationError('INVALID_REQUEST', 'Invitation creation request is invalid');
     }
-    this.delivery.assertAvailable();
+    try {
+      this.delivery.assertAvailable();
+    } catch (cause) {
+      if (cause instanceof InvitationDeliveryUnavailableError) throw new ApplicationError('UNAVAILABLE', cause.message);
+      throw cause;
+    }
     const id = `INV-${randomUUID()}`;
     const expiresAt = new Date(Date.now() + INVITATION_LIFETIME_MS).toISOString();
     const token = this.tokens.tokenFor({ id, email: request.data.email, expiresAt });
@@ -141,7 +125,8 @@ export class GovernanceService {
         replayed: result.replayed
       });
     } catch (cause) {
-      if (cause instanceof GovernanceConflictError) throw new ConflictException(cause.message);
+      if (cause instanceof InvitationDeliveryUnavailableError) throw new ApplicationError('UNAVAILABLE', cause.message);
+      if (cause instanceof GovernanceConflictError) throw new ApplicationError('CONFLICT', cause.message);
       throw cause;
     }
   }
@@ -149,12 +134,11 @@ export class GovernanceService {
   async revokeInvitation(
     context: OrganizationAccessContext,
     invitationIdInput: unknown,
-    ifMatchInput: unknown,
+    expectedRowVersion: number,
     requestId: string
   ) {
     const invitationId = InvitationIdSchema.safeParse(invitationIdInput);
-    if (!invitationId.success) throw new NotFoundException('Invitation was not found');
-    const expectedRowVersion = expectedInvitationRowVersion(ifMatchInput, invitationId.data);
+    if (!invitationId.success) throw new ApplicationError('NOT_FOUND', 'Invitation was not found');
     try {
       return await this.repository.revokeInvitation({
         invitationId: invitationId.data,
@@ -163,25 +147,25 @@ export class GovernanceService {
         requestId
       });
     } catch (cause) {
-      if (cause instanceof GovernanceNotFoundError) throw new NotFoundException(cause.message);
+      if (cause instanceof GovernanceNotFoundError) throw new ApplicationError('NOT_FOUND', cause.message);
       if (cause instanceof GovernanceVersionConflictError) {
-        throw new HttpException(cause.message, HttpStatus.PRECONDITION_FAILED);
+        throw new ApplicationError('PRECONDITION_FAILED', cause.message);
       }
-      if (cause instanceof GovernanceConflictError) throw new ConflictException(cause.message);
+      if (cause instanceof GovernanceConflictError) throw new ApplicationError('CONFLICT', cause.message);
       throw cause;
     }
   }
 
   async acceptInvitation(principal: Principal, input: unknown, requestId: string) {
     const request = AcceptInvitationRequestSchema.safeParse(input);
-    if (!request.success) throw new BadRequestException('Invitation acceptance request is invalid');
+    if (!request.success) throw new ApplicationError('INVALID_REQUEST', 'Invitation acceptance request is invalid');
     try {
       return AcceptInvitationResponseSchema.parse(
         await this.repository.acceptInvitation(principal, this.tokens.hash(request.data.token), requestId)
       );
     } catch (cause) {
-      if (cause instanceof GovernanceNotFoundError) throw new NotFoundException(cause.message);
-      if (cause instanceof GovernanceConflictError) throw new ConflictException(cause.message);
+      if (cause instanceof GovernanceNotFoundError) throw new ApplicationError('NOT_FOUND', cause.message);
+      if (cause instanceof GovernanceConflictError) throw new ApplicationError('CONFLICT', cause.message);
       throw cause;
     }
   }

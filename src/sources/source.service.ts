@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 
-import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 
 import type { OrganizationAccessContext } from '../identity/identity.schema';
+import { ApplicationError } from '../platform/application/application-error';
 import { ProjectIdSchema } from '../projects/project.schema';
 import { extractSourceText, UnsupportedSourceTypeError, validateSourceContent } from './source-extractor';
 import {
@@ -19,6 +20,7 @@ import {
   AnalysisRunResponseSchema,
   CreateAnalysisRunRequestSchema,
   IdempotencyKeySchema,
+  LatestAnalysisRunResponseSchema,
   SourceListResponseSchema,
   UploadSourceRequestSchema
 } from './source.schema';
@@ -34,7 +36,7 @@ function deterministicId(prefix: 'SRC' | 'ANRUN', value: string): string {
 
 function decodeBase64(value: string): Buffer {
   if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)) {
-    throw new BadRequestException('Source contentBase64 is invalid');
+    throw new ApplicationError('INVALID_REQUEST', 'Source contentBase64 is invalid');
   }
   return Buffer.from(value, 'base64');
 }
@@ -48,29 +50,29 @@ export class SourceService {
 
   async list(context: OrganizationAccessContext, projectIdInput: unknown) {
     const projectId = ProjectIdSchema.safeParse(projectIdInput);
-    if (!projectId.success) throw new NotFoundException('Project was not found');
+    if (!projectId.success) throw new ApplicationError('NOT_FOUND', 'Project was not found');
     const sources = await this.repository.list({ organizationId: context.organizationId }, projectId.data);
-    if (sources === null) throw new NotFoundException('Project was not found');
+    if (sources === null) throw new ApplicationError('NOT_FOUND', 'Project was not found');
     return SourceListResponseSchema.parse({ sources });
   }
 
   async upload(context: OrganizationAccessContext, projectIdInput: unknown, bodyInput: unknown, idempotencyKeyInput: unknown, requestId: string) {
     const projectId = ProjectIdSchema.safeParse(projectIdInput);
-    if (!projectId.success) throw new NotFoundException('Project was not found');
+    if (!projectId.success) throw new ApplicationError('NOT_FOUND', 'Project was not found');
     const body = UploadSourceRequestSchema.safeParse(bodyInput);
-    if (!body.success) throw new BadRequestException('Source upload request is invalid');
+    if (!body.success) throw new ApplicationError('INVALID_REQUEST', 'Source upload request is invalid');
     const idempotencyKey = IdempotencyKeySchema.safeParse(idempotencyKeyInput);
-    if (!idempotencyKey.success) throw new BadRequestException('A valid Idempotency-Key header is required');
+    if (!idempotencyKey.success) throw new ApplicationError('INVALID_REQUEST', 'A valid Idempotency-Key header is required');
     const project = await this.repository.projectIdentity({ organizationId: context.organizationId }, projectId.data);
-    if (project === null) throw new NotFoundException('Project was not found');
-    if (project.status === 'ARCHIVED') throw new ConflictException('Archived projects cannot accept sources');
+    if (project === null) throw new ApplicationError('NOT_FOUND', 'Project was not found');
+    if (project.status === 'ARCHIVED') throw new ApplicationError('CONFLICT', 'Archived projects cannot accept sources');
 
     const content = decodeBase64(body.data.contentBase64);
     try {
       validateSourceContent({ name: body.data.name, mimeType: body.data.mimeType, content });
     } catch (cause) {
-      if (cause instanceof UnsupportedSourceTypeError) throw new BadRequestException(cause.message);
-      throw new BadRequestException(cause instanceof Error ? cause.message : 'Source validation failed');
+      if (cause instanceof UnsupportedSourceTypeError) throw new ApplicationError('INVALID_REQUEST', cause.message);
+      throw new ApplicationError('INVALID_REQUEST', cause instanceof Error ? cause.message : 'Source validation failed');
     }
     const contentHash = sha256(content);
     const sourceKey = sha256(JSON.stringify({
@@ -107,19 +109,19 @@ export class SourceService {
         requestHash, requestId
       });
     } catch (cause) {
-      if (cause instanceof SourceProjectNotFoundError) throw new NotFoundException(cause.message);
-      if (cause instanceof SourceProjectArchivedError || cause instanceof SourceIdempotencyConflictError) throw new ConflictException(cause.message);
+      if (cause instanceof SourceProjectNotFoundError) throw new ApplicationError('NOT_FOUND', cause.message);
+      if (cause instanceof SourceProjectArchivedError || cause instanceof SourceIdempotencyConflictError) throw new ApplicationError('CONFLICT', cause.message);
       throw cause;
     }
   }
 
   async queueAnalysis(context: OrganizationAccessContext, projectIdInput: unknown, bodyInput: unknown, idempotencyKeyInput: unknown, requestId: string) {
     const projectId = ProjectIdSchema.safeParse(projectIdInput);
-    if (!projectId.success) throw new NotFoundException('Project was not found');
+    if (!projectId.success) throw new ApplicationError('NOT_FOUND', 'Project was not found');
     const body = CreateAnalysisRunRequestSchema.safeParse(bodyInput);
-    if (!body.success) throw new BadRequestException('Analysis request is invalid');
+    if (!body.success) throw new ApplicationError('INVALID_REQUEST', 'Analysis request is invalid');
     const idempotencyKey = IdempotencyKeySchema.safeParse(idempotencyKeyInput);
-    if (!idempotencyKey.success) throw new BadRequestException('A valid Idempotency-Key header is required');
+    if (!idempotencyKey.success) throw new ApplicationError('INVALID_REQUEST', 'A valid Idempotency-Key header is required');
     const requestHash = sha256(JSON.stringify(body.data));
     try {
       return await this.repository.queueAnalysis({ organizationId: context.organizationId }, {
@@ -129,9 +131,9 @@ export class SourceService {
         idempotencyKey: idempotencyKey.data, requestHash, requestId
       });
     } catch (cause) {
-      if (cause instanceof SourceProjectNotFoundError) throw new NotFoundException(cause.message);
+      if (cause instanceof SourceProjectNotFoundError) throw new ApplicationError('NOT_FOUND', cause.message);
       if (cause instanceof SourceProjectArchivedError || cause instanceof SourceIdempotencyConflictError || cause instanceof AnalysisAlreadyActiveError || cause instanceof AnalysisSourcesUnavailableError) {
-        throw new ConflictException(cause.message);
+        throw new ApplicationError('CONFLICT', cause.message);
       }
       throw cause;
     }
@@ -140,27 +142,29 @@ export class SourceService {
   async getAnalysisRun(context: OrganizationAccessContext, projectIdInput: unknown, runIdInput: unknown) {
     const projectId = ProjectIdSchema.safeParse(projectIdInput);
     const runId = AnalysisRunIdSchema.safeParse(runIdInput);
-    if (!projectId.success || !runId.success) throw new NotFoundException('Analysis run was not found');
+    if (!projectId.success || !runId.success) throw new ApplicationError('NOT_FOUND', 'Analysis run was not found');
     const run = await this.repository.findAnalysisRun({ organizationId: context.organizationId }, projectId.data, runId.data);
-    if (run === null) throw new NotFoundException('Analysis run was not found');
+    if (run === null) throw new ApplicationError('NOT_FOUND', 'Analysis run was not found');
     return AnalysisRunResponseSchema.parse(run);
   }
 
   async getLatestAnalysisRun(context: OrganizationAccessContext, projectIdInput: unknown) {
     const projectId = ProjectIdSchema.safeParse(projectIdInput);
-    if (!projectId.success) throw new NotFoundException('Project was not found');
+    if (!projectId.success) throw new ApplicationError('NOT_FOUND', 'Project was not found');
     const project = await this.repository.projectIdentity({ organizationId: context.organizationId }, projectId.data);
-    if (project === null) throw new NotFoundException('Project was not found');
+    if (project === null) throw new ApplicationError('NOT_FOUND', 'Project was not found');
     const run = await this.repository.latestAnalysisRun({ organizationId: context.organizationId }, projectId.data);
-    return { run: run === null ? null : AnalysisRunResponseSchema.parse(run) };
+    return LatestAnalysisRunResponseSchema.parse({
+      run: run === null ? null : AnalysisRunResponseSchema.parse(run)
+    });
   }
 
   async cancelAnalysisRun(context: OrganizationAccessContext, projectIdInput: unknown, runIdInput: unknown, requestId: string) {
     const projectId = ProjectIdSchema.safeParse(projectIdInput);
     const runId = AnalysisRunIdSchema.safeParse(runIdInput);
-    if (!projectId.success || !runId.success) throw new NotFoundException('Analysis run was not found');
+    if (!projectId.success || !runId.success) throw new ApplicationError('NOT_FOUND', 'Analysis run was not found');
     const run = await this.repository.cancelAnalysisRun({ organizationId: context.organizationId }, projectId.data, runId.data, context.userId, requestId);
-    if (run === null) throw new NotFoundException('Analysis run was not found');
+    if (run === null) throw new ApplicationError('NOT_FOUND', 'Analysis run was not found');
     return AnalysisRunResponseSchema.parse(run);
   }
 }

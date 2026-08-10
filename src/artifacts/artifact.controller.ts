@@ -5,7 +5,8 @@ import type { FastifyReply } from 'fastify';
 import { requireAccessContext, type AuthenticatedRequest } from '../identity/access/access-context';
 import { ARTIFACT_APPROVE, ARTIFACT_GENERATE, PROJECT_READ } from '../identity/access/permissions';
 import { RequirePermission } from '../identity/access/require-permission.decorator';
-import { projectEtag } from '../projects/project.service';
+import { formatStrongEntityTag } from '../platform/http/entity-tag';
+import { parseProjectVersionPrecondition } from '../projects/project-http';
 import { ArtifactService } from './artifact.service';
 
 @ApiTags('artifacts')
@@ -38,8 +39,9 @@ export class ArtifactController {
     @Headers('idempotency-key') idempotencyKey: unknown,
     @Res({ passthrough: true }) reply: FastifyReply
   ) {
-    const result = await this.service.generate(requireAccessContext(request), projectId, body, ifMatch, idempotencyKey, request.id);
-    void reply.header('ETag', projectEtag(result.project));
+    const precondition = parseProjectVersionPrecondition(projectId, ifMatch);
+    const result = await this.service.generate(requireAccessContext(request), precondition.projectId, body, precondition.expectedRowVersion, idempotencyKey, request.id);
+    void reply.header('ETag', formatStrongEntityTag(result.project.id, result.project.rowVersion));
     void reply.header('Idempotency-Replayed', String(result.replayed));
     return result;
   }
@@ -59,8 +61,9 @@ export class ArtifactController {
     @Headers('idempotency-key') idempotencyKey: unknown,
     @Res({ passthrough: true }) reply: FastifyReply
   ) {
-    const result = await this.service.approve(requireAccessContext(request), projectId, body, ifMatch, idempotencyKey, request.id);
-    void reply.header('ETag', projectEtag(result.project));
+    const precondition = parseProjectVersionPrecondition(projectId, ifMatch);
+    const result = await this.service.approve(requireAccessContext(request), precondition.projectId, body, precondition.expectedRowVersion, idempotencyKey, request.id);
+    void reply.header('ETag', formatStrongEntityTag(result.project.id, result.project.rowVersion));
     void reply.header('Idempotency-Replayed', String(result.replayed));
     return result;
   }

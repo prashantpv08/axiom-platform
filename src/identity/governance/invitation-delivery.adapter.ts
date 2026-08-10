@@ -1,4 +1,4 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 
 export const INVITATION_DELIVERY_ADAPTER = Symbol('AXIOM_INVITATION_DELIVERY_ADAPTER');
 
@@ -9,11 +9,18 @@ export interface InvitationDeliveryAdapter {
   deliverLocally(token: string): InvitationDelivery;
 }
 
+export class InvitationDeliveryUnavailableError extends Error {
+  constructor() {
+    super('Invitation delivery is not configured');
+    this.name = 'InvitationDeliveryUnavailableError';
+  }
+}
+
 @Injectable()
 export class LocalManualInvitationDeliveryAdapter implements InvitationDeliveryAdapter {
   assertAvailable(): void {
     if (process.env.AXIOM_LOCAL_INVITATION_DELIVERY_ENABLED !== 'true') {
-      throw new ServiceUnavailableException('Invitation delivery is not configured');
+      throw new InvitationDeliveryUnavailableError();
     }
   }
 

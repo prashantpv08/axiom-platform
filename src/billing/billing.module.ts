@@ -4,6 +4,9 @@ import { BillingController } from './billing.controller';
 import { BILLING_REPOSITORY } from './billing.repository';
 import { BillingService } from './billing.service';
 import { PostgresBillingRepository } from './postgres-billing.repository';
+import { PostgresBillingOverviewQuery } from './postgres-billing-overview.query';
+import { PostgresBudgetPolicyRepository } from './postgres-budget-policy.repository';
+import { PostgresUsageAccountingRepository } from './postgres-usage-accounting.repository';
 import { LocalFixtureSubscriptionAdapter } from './local-fixture-subscription.adapter';
 import { SUBSCRIPTION_PROVIDER_ADAPTER } from './subscription-provider.adapter';
 import { PostgresSubscriptionWebhookRepository } from './postgres-subscription-webhook.repository';
@@ -15,6 +18,9 @@ import { SubscriptionWebhookService } from './subscription-webhook.service';
   controllers: [BillingController, SubscriptionWebhookController],
   providers: [
     BillingService,
+    PostgresBillingOverviewQuery,
+    PostgresUsageAccountingRepository,
+    PostgresBudgetPolicyRepository,
     PostgresBillingRepository,
     { provide: BILLING_REPOSITORY, useExisting: PostgresBillingRepository },
     SubscriptionWebhookService,

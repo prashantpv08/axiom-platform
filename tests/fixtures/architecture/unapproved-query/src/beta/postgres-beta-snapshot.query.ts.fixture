@@ -1,0 +1,1 @@
+export const betaSnapshot = { id: 'beta' };

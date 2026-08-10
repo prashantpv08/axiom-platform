@@ -5,7 +5,11 @@ import { and, asc, desc, eq, max, sql } from 'drizzle-orm';
 
 import type { AxiomDatabase } from '../database/client';
 import { DATABASE } from '../database/database.module';
-import { analysisRuns, auditEvents, idempotencyRecords, projectSources, projects } from '../database/schema';
+import {
+  claimPostgresIdempotency,
+  completePostgresIdempotency
+} from '../database/idempotency/postgres-idempotency';
+import { analysisRuns, auditEvents, projectSources, projects } from '../database/schema';
 import {
   AnalysisAlreadyActiveError,
   AnalysisRunNotFoundError,
@@ -74,21 +78,19 @@ export class PostgresSourceRepository implements SourceRepository {
   async create(scope: SourceScope, input: Parameters<SourceRepository['create']>[1]) {
     return this.database.transaction(async (transaction) => {
       const now = new Date().toISOString();
-      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
-      const [reservation] = await transaction.insert(idempotencyRecords).values({
-        id: `IDEMP-${randomUUID()}`, organizationId: scope.organizationId, scope: `SOURCE_UPLOAD:${input.source.projectId}`,
-        key: input.idempotencyKey, requestHash: input.requestHash, expiresAt
-      }).onConflictDoNothing().returning({ id: idempotencyRecords.id });
-      if (reservation === undefined) {
-        const [existing] = await transaction.select().from(idempotencyRecords).where(and(
-          eq(idempotencyRecords.organizationId, scope.organizationId),
-          eq(idempotencyRecords.scope, `SOURCE_UPLOAD:${input.source.projectId}`),
-          eq(idempotencyRecords.key, input.idempotencyKey)
-        )).limit(1).for('update');
-        if (existing === undefined || existing.requestHash !== input.requestHash) throw new SourceIdempotencyConflictError('Idempotency key was already used for another source');
-        if (existing.status === 'COMPLETED' && existing.responsePayload !== null) {
-          return { source: SourceResponseSchema.parse(existing.responsePayload), replayed: true };
-        }
+      const reservation = await claimPostgresIdempotency(transaction, {
+        organizationId: scope.organizationId,
+        scope: `SOURCE_UPLOAD:${input.source.projectId}`,
+        key: input.idempotencyKey,
+        requestHash: input.requestHash
+      });
+      if (reservation.kind === 'HASH_CONFLICT') {
+        throw new SourceIdempotencyConflictError('Idempotency key was already used for another source');
+      }
+      if (reservation.kind === 'REPLAY') {
+        return { source: SourceResponseSchema.parse(reservation.responsePayload), replayed: true };
+      }
+      if (reservation.kind === 'IN_PROGRESS') {
         throw new SourceIdempotencyConflictError('Source upload with this idempotency key is still processing');
       }
 
@@ -116,8 +118,12 @@ export class PostgresSourceRepository implements SourceRepository {
         action: 'PROJECT_SOURCE_UPLOADED', targetType: 'ProjectSource', targetId: source.id,
         requestId: input.requestId, metadata: { projectId: source.projectId, sha256: source.sha256, version: source.version, status: source.status }
       });
-      await transaction.update(idempotencyRecords).set({ status: 'COMPLETED', responseStatus: 201, responsePayload: source, updatedAt: now })
-        .where(eq(idempotencyRecords.id, reservation.id));
+      await completePostgresIdempotency(transaction, {
+        recordId: reservation.recordId,
+        responseStatus: 201,
+        responsePayload: source,
+        completedAt: now
+      });
       return { source, replayed: false };
     });
   }
@@ -126,17 +132,19 @@ export class PostgresSourceRepository implements SourceRepository {
     try {
       return await this.database.transaction(async (transaction) => {
         const now = new Date().toISOString();
-        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
-        const [reservation] = await transaction.insert(idempotencyRecords).values({
-          id: `IDEMP-${randomUUID()}`, organizationId: scope.organizationId, scope: `ANALYSIS_QUEUE:${input.projectId}`,
-          key: input.idempotencyKey, requestHash: input.requestHash, expiresAt
-        }).onConflictDoNothing().returning({ id: idempotencyRecords.id });
-        if (reservation === undefined) {
-          const [existing] = await transaction.select().from(idempotencyRecords).where(and(
-            eq(idempotencyRecords.organizationId, scope.organizationId), eq(idempotencyRecords.scope, `ANALYSIS_QUEUE:${input.projectId}`), eq(idempotencyRecords.key, input.idempotencyKey)
-          )).limit(1).for('update');
-          if (existing === undefined || existing.requestHash !== input.requestHash) throw new SourceIdempotencyConflictError('Idempotency key was already used for another analysis request');
-          if (existing.status === 'COMPLETED' && existing.responsePayload !== null) return { run: AnalysisRunResponseSchema.parse(existing.responsePayload), replayed: true };
+        const reservation = await claimPostgresIdempotency(transaction, {
+          organizationId: scope.organizationId,
+          scope: `ANALYSIS_QUEUE:${input.projectId}`,
+          key: input.idempotencyKey,
+          requestHash: input.requestHash
+        });
+        if (reservation.kind === 'HASH_CONFLICT') {
+          throw new SourceIdempotencyConflictError('Idempotency key was already used for another analysis request');
+        }
+        if (reservation.kind === 'REPLAY') {
+          return { run: AnalysisRunResponseSchema.parse(reservation.responsePayload), replayed: true };
+        }
+        if (reservation.kind === 'IN_PROGRESS') {
           throw new SourceIdempotencyConflictError('Analysis request with this idempotency key is still processing');
         }
         const [project] = await transaction.select({ id: projects.id, status: projects.status }).from(projects)
@@ -160,8 +168,12 @@ export class PostgresSourceRepository implements SourceRepository {
           action: 'PROJECT_ANALYSIS_QUEUED', targetType: 'AnalysisRun', targetId: run.id,
           requestId: input.requestId, metadata: { projectId: input.projectId, sourceSnapshotHash: run.sourceSnapshotHash }
         });
-        await transaction.update(idempotencyRecords).set({ status: 'COMPLETED', responseStatus: 202, responsePayload: run, updatedAt: now })
-          .where(eq(idempotencyRecords.id, reservation.id));
+        await completePostgresIdempotency(transaction, {
+          recordId: reservation.recordId,
+          responseStatus: 202,
+          responsePayload: run,
+          completedAt: now
+        });
         return { run, replayed: false };
       });
     } catch (cause) {

@@ -5,11 +5,11 @@ import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 
 import type { AxiomDatabase } from '../database/client';
 import { DATABASE } from '../database/database.module';
+import { claimPostgresIdempotency, completePostgresIdempotency } from '../database/idempotency/postgres-idempotency';
 import {
   auditEvents,
   businessContextReviews,
   businessContextVersions,
-  idempotencyRecords,
   knowledgeEntities,
   projectGaps,
   projectGraphs,
@@ -168,25 +168,15 @@ export class PostgresBusinessContextRepository implements BusinessContextReposit
 
   async generate(input: BusinessContextGenerationInput) {
     return this.database.transaction(async (transaction) => {
-      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
-      const [reservation] = await transaction.insert(idempotencyRecords).values({
-        id: `IDEMP-${randomUUID()}`,
+      const reservation = await claimPostgresIdempotency(transaction, {
         organizationId: input.context.organizationId,
         scope: 'BUSINESS_CONTEXT_GENERATE',
         key: input.idempotencyKey,
-        requestHash: input.requestHash,
-        expiresAt
-      }).onConflictDoNothing().returning({ id: idempotencyRecords.id });
-      if (reservation === undefined) {
-        const [existing] = await transaction.select().from(idempotencyRecords).where(and(
-          eq(idempotencyRecords.organizationId, input.context.organizationId),
-          eq(idempotencyRecords.scope, 'BUSINESS_CONTEXT_GENERATE'),
-          eq(idempotencyRecords.key, input.idempotencyKey)
-        )).limit(1).for('update');
-        if (existing === undefined || existing.requestHash !== input.requestHash) throw new BusinessContextConflictError('Idempotency key was used for another Business Context generation');
-        if (existing.status === 'COMPLETED' && existing.responsePayload !== null) return BusinessContextMutationResponseSchema.parse({ ...existing.responsePayload, replayed: true });
-        throw new BusinessContextConflictError('Business Context generation with this idempotency key is still processing');
-      }
+        requestHash: input.requestHash
+      });
+      if (reservation.kind === 'HASH_CONFLICT') throw new BusinessContextConflictError('Idempotency key was used for another Business Context generation');
+      if (reservation.kind === 'REPLAY') return BusinessContextMutationResponseSchema.parse({ ...reservation.responsePayload, replayed: true });
+      if (reservation.kind === 'IN_PROGRESS') throw new BusinessContextConflictError('Business Context generation with this idempotency key is still processing');
 
       const [project] = await transaction.select().from(projects).where(and(
         eq(projects.organizationId, input.context.organizationId),
@@ -264,37 +254,27 @@ export class PostgresBusinessContextRepository implements BusinessContextReposit
           sessionId: input.context.sessionId
         }
       });
-      await transaction.update(idempotencyRecords).set({
-        status: 'COMPLETED',
+      await completePostgresIdempotency(transaction, {
+        recordId: reservation.recordId,
         responseStatus: 201,
         responsePayload: response,
-        updatedAt: generatedAt
-      }).where(eq(idempotencyRecords.id, reservation.id));
+        completedAt: generatedAt
+      });
       return response;
     });
   }
 
   async review(input: BusinessContextReviewInput) {
     return this.database.transaction(async (transaction) => {
-      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
-      const [reservation] = await transaction.insert(idempotencyRecords).values({
-        id: `IDEMP-${randomUUID()}`,
+      const reservation = await claimPostgresIdempotency(transaction, {
         organizationId: input.context.organizationId,
         scope: 'BUSINESS_CONTEXT_REVIEW',
         key: input.idempotencyKey,
-        requestHash: input.requestHash,
-        expiresAt
-      }).onConflictDoNothing().returning({ id: idempotencyRecords.id });
-      if (reservation === undefined) {
-        const [existing] = await transaction.select().from(idempotencyRecords).where(and(
-          eq(idempotencyRecords.organizationId, input.context.organizationId),
-          eq(idempotencyRecords.scope, 'BUSINESS_CONTEXT_REVIEW'),
-          eq(idempotencyRecords.key, input.idempotencyKey)
-        )).limit(1).for('update');
-        if (existing === undefined || existing.requestHash !== input.requestHash) throw new BusinessContextConflictError('Idempotency key was used for another Business Context review');
-        if (existing.status === 'COMPLETED' && existing.responsePayload !== null) return BusinessContextMutationResponseSchema.parse({ ...existing.responsePayload, replayed: true });
-        throw new BusinessContextConflictError('Business Context review with this idempotency key is still processing');
-      }
+        requestHash: input.requestHash
+      });
+      if (reservation.kind === 'HASH_CONFLICT') throw new BusinessContextConflictError('Idempotency key was used for another Business Context review');
+      if (reservation.kind === 'REPLAY') return BusinessContextMutationResponseSchema.parse({ ...reservation.responsePayload, replayed: true });
+      if (reservation.kind === 'IN_PROGRESS') throw new BusinessContextConflictError('Business Context review with this idempotency key is still processing');
 
       const [project] = await transaction.select().from(projects).where(and(
         eq(projects.organizationId, input.context.organizationId),
@@ -379,12 +359,12 @@ export class PostgresBusinessContextRepository implements BusinessContextReposit
           sessionId: input.context.sessionId
         }
       });
-      await transaction.update(idempotencyRecords).set({
-        status: 'COMPLETED',
+      await completePostgresIdempotency(transaction, {
+        recordId: reservation.recordId,
         responseStatus: 201,
         responsePayload: response,
-        updatedAt: reviewedAt
-      }).where(eq(idempotencyRecords.id, reservation.id));
+        completedAt: reviewedAt
+      });
       return response;
     });
   }

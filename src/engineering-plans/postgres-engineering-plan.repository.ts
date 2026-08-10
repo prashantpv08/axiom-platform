@@ -8,10 +8,15 @@ import { currentArchitectureDecision } from '../architecture/postgres-architectu
 import type { AxiomDatabase } from '../database/client';
 import { DATABASE } from '../database/database.module';
 import {
+  claimPostgresIdempotency,
+  completePostgresIdempotency,
+  lockActivePostgresIdempotency,
+  releasePostgresIdempotency
+} from '../database/idempotency/postgres-idempotency';
+import {
   agentRuns,
   auditEvents,
   engineeringPlanGenerations,
-  idempotencyRecords,
   knowledgeEntities,
   modelCalls,
   projectGaps,
@@ -99,12 +104,13 @@ export class PostgresEngineeringPlanRepository implements EngineeringPlanReposit
 
   async persist(input: PersistEngineeringPlanInput): Promise<EngineeringPlanPreview> {
     return this.database.transaction(async (transaction) => {
-      const [reservation] = await transaction.select().from(idempotencyRecords).where(and(
-        eq(idempotencyRecords.organizationId, input.context.organizationId),
-        eq(idempotencyRecords.scope, 'ENGINEERING_PLAN_GENERATE'),
-        eq(idempotencyRecords.key, input.idempotencyKey)
-      )).limit(1).for('update');
-      if (reservation === undefined || reservation.requestHash !== input.requestHash || reservation.status !== 'PROCESSING') {
+      const reservationId = await lockActivePostgresIdempotency(transaction, {
+        organizationId: input.context.organizationId,
+        scope: 'ENGINEERING_PLAN_GENERATE',
+        key: input.idempotencyKey,
+        requestHash: input.requestHash
+      });
+      if (reservationId === null) {
         throw new EngineeringPlanConflictError('Engineering Plan idempotency reservation is not active');
       }
 
@@ -190,41 +196,40 @@ export class PostgresEngineeringPlanRepository implements EngineeringPlanReposit
           sessionId: input.context.sessionId
         }
       });
-      await transaction.update(idempotencyRecords).set({ status: 'COMPLETED', responseStatus: 201, responsePayload: preview, updatedAt: createdAt })
-        .where(eq(idempotencyRecords.id, reservation.id));
+      await completePostgresIdempotency(transaction, {
+        recordId: reservationId,
+        responseStatus: 201,
+        responsePayload: preview,
+        completedAt: createdAt
+      });
       return preview;
     });
   }
 
   async reserve(organizationId: string, idempotencyKey: string, requestHash: string): Promise<EngineeringPlanPreview | null> {
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
-    const [reservation] = await this.database.insert(idempotencyRecords).values({
-      id: `IDEMP-${randomUUID()}`,
+    const reservation = await claimPostgresIdempotency(this.database, {
       organizationId,
       scope: 'ENGINEERING_PLAN_GENERATE',
       key: idempotencyKey,
-      requestHash,
-      expiresAt
-    }).onConflictDoNothing().returning({ id: idempotencyRecords.id });
-    if (reservation !== undefined) return null;
-    const [existing] = await this.database.select().from(idempotencyRecords).where(and(
-      eq(idempotencyRecords.organizationId, organizationId),
-      eq(idempotencyRecords.scope, 'ENGINEERING_PLAN_GENERATE'),
-      eq(idempotencyRecords.key, idempotencyKey)
-    )).limit(1);
-    if (existing === undefined || existing.requestHash !== requestHash) throw new EngineeringPlanConflictError('Idempotency key was used for another Engineering Plan request');
-    if (existing.status === 'COMPLETED' && existing.responsePayload !== null) return EngineeringPlanPreviewSchema.parse({ ...existing.responsePayload, replayed: true });
+      requestHash
+    });
+    if (reservation.kind === 'ACQUIRED') return null;
+    if (reservation.kind === 'HASH_CONFLICT') {
+      throw new EngineeringPlanConflictError('Idempotency key was used for another Engineering Plan request');
+    }
+    if (reservation.kind === 'REPLAY') {
+      return EngineeringPlanPreviewSchema.parse({ ...reservation.responsePayload, replayed: true });
+    }
     throw new EngineeringPlanConflictError('Engineering Plan generation with this idempotency key is still processing');
   }
 
   async release(organizationId: string, idempotencyKey: string, requestHash: string): Promise<void> {
-    await this.database.delete(idempotencyRecords).where(and(
-      eq(idempotencyRecords.organizationId, organizationId),
-      eq(idempotencyRecords.scope, 'ENGINEERING_PLAN_GENERATE'),
-      eq(idempotencyRecords.key, idempotencyKey),
-      eq(idempotencyRecords.requestHash, requestHash),
-      eq(idempotencyRecords.status, 'PROCESSING')
-    ));
+    await releasePostgresIdempotency(this.database, {
+      organizationId,
+      scope: 'ENGINEERING_PLAN_GENERATE',
+      key: idempotencyKey,
+      requestHash
+    });
   }
 
   async latest(organizationId: string, projectId: string): Promise<EngineeringPlanPreview | null> {

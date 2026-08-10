@@ -5,7 +5,11 @@ import type { FastifyReply } from 'fastify';
 import { requireAccessContext, type AuthenticatedRequest } from '../identity/access/access-context';
 import { WORK_ITEM_REVIEW } from '../identity/access/permissions';
 import { RequirePermission } from '../identity/access/require-permission.decorator';
-import type { WorkItemGenerationPreview } from './work-item-generation.schema';
+import { ApplicationError } from '../platform/application/application-error';
+import { formatStrongEntityTag, parseStrongEntityTag } from '../platform/http/entity-tag';
+import { ProjectIdSchema } from '../projects/project.schema';
+import { WorkItemGenerationIdSchema, type WorkItemGenerationPreview } from './work-item-generation.schema';
+import { WorkItemGenerationReviewEtagSchema } from './work-item-review.schema';
 import { WorkItemReviewService } from './work-item-review.service';
 
 @ApiTags('work-items')
@@ -31,9 +35,27 @@ export class WorkItemReviewController {
     @Headers('idempotency-key') idempotencyKey: unknown,
     @Res({ passthrough: true }) reply: FastifyReply
   ): Promise<WorkItemGenerationPreview> {
-    const preview = await this.service.submit(requireAccessContext(request), projectId, generationId, body, ifMatch, idempotencyKey, request.id);
+    const parsedProjectId = ProjectIdSchema.safeParse(projectId);
+    const parsedGenerationId = WorkItemGenerationIdSchema.safeParse(generationId);
+    if (!parsedProjectId.success || !parsedGenerationId.success) {
+      throw new ApplicationError('NOT_FOUND', 'Work-item generation was not found');
+    }
+    const validatedIfMatch = parseStrongEntityTag(
+      ifMatch,
+      (candidate) => WorkItemGenerationReviewEtagSchema.safeParse(candidate).success,
+      'Work-item review request is invalid'
+    );
+    const preview = await this.service.submit(
+      requireAccessContext(request),
+      parsedProjectId.data,
+      parsedGenerationId.data,
+      body,
+      validatedIfMatch,
+      idempotencyKey,
+      request.id
+    );
     void reply.header('Idempotency-Replayed', String(preview.replayed));
-    void reply.header('ETag', `"${preview.id}:${preview.contentHash}"`);
+    void reply.header('ETag', formatStrongEntityTag(preview.id, preview.contentHash));
     return preview;
   }
 }

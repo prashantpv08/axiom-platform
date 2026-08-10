@@ -1,5 +1,6 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 
+import { ApplicationError } from '../../platform/application/application-error';
 import {
   OrganizationResponseSchema,
   type OrganizationResponse,
@@ -18,7 +19,7 @@ export class OrganizationService {
   async getOrganization(request: AuthorizedOrganizationRequest): Promise<OrganizationResponse> {
     const organization = await this.repository.findOrganization(request.context.organizationId);
     if (organization === null || organization.status !== 'ACTIVE') {
-      throw new NotFoundException('Organization was not found');
+      throw new ApplicationError('NOT_FOUND', 'Organization was not found');
     }
 
     await this.repository.appendAuditEvent({

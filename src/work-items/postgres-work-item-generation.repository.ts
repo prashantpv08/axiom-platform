@@ -5,13 +5,13 @@ import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 
 import type { AxiomDatabase } from '../database/client';
 import { DATABASE } from '../database/database.module';
+import { claimPostgresIdempotency, completePostgresIdempotency } from '../database/idempotency/postgres-idempotency';
 import { currentArtifactApproval } from '../artifacts/postgres-artifact-approval.query';
 import { currentArchitectureDecision } from '../architecture/postgres-architecture-decision.query';
 import {
   agentRuns,
   auditEvents,
   clarificationQuestions,
-  idempotencyRecords,
   knowledgeEntities,
   modelCalls,
   projectGaps,
@@ -120,24 +120,23 @@ export class PostgresWorkItemGenerationRepository implements WorkItemGenerationR
 
   async persist(input: PersistGenerationInput): Promise<WorkItemGenerationPreview> {
     return this.database.transaction(async (transaction) => {
-      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
-      const [reservation] = await transaction.insert(idempotencyRecords).values({
-        id: `IDEMP-${randomUUID()}`, organizationId: input.context.organizationId, scope: 'WORK_ITEM_GENERATE', key: input.idempotencyKey, requestHash: input.requestHash, expiresAt
-      }).onConflictDoNothing().returning({ id: idempotencyRecords.id });
-      if (reservation === undefined) {
-        const [existing] = await transaction.select().from(idempotencyRecords).where(and(eq(idempotencyRecords.organizationId, input.context.organizationId), eq(idempotencyRecords.scope, 'WORK_ITEM_GENERATE'), eq(idempotencyRecords.key, input.idempotencyKey))).limit(1).for('update');
-        if (existing === undefined || existing.requestHash !== input.requestHash) throw new WorkItemGenerationConflictError('Idempotency key was used for another generation request');
-        if (existing.status === 'COMPLETED' && existing.responsePayload !== null) {
-          const payload = existing.responsePayload as Record<string, unknown>;
-          return WorkItemGenerationPreviewSchema.parse({
-            ...payload,
-            generationContentHash: payload.generationContentHash ?? payload.contentHash,
-            review: payload.review ?? null,
-            replayed: true
-          });
-        }
-        throw new WorkItemGenerationConflictError('Generation with this idempotency key is still processing');
+      const reservation = await claimPostgresIdempotency(transaction, {
+        organizationId: input.context.organizationId,
+        scope: 'WORK_ITEM_GENERATE',
+        key: input.idempotencyKey,
+        requestHash: input.requestHash
+      });
+      if (reservation.kind === 'HASH_CONFLICT') throw new WorkItemGenerationConflictError('Idempotency key was used for another generation request');
+      if (reservation.kind === 'REPLAY') {
+        const payload = reservation.responsePayload;
+        return WorkItemGenerationPreviewSchema.parse({
+          ...payload,
+          generationContentHash: payload.generationContentHash ?? payload.contentHash,
+          review: payload.review ?? null,
+          replayed: true
+        });
       }
+      if (reservation.kind === 'IN_PROGRESS') throw new WorkItemGenerationConflictError('Generation with this idempotency key is still processing');
 
       const [project] = await transaction.select({ status: projects.status, graphVersion: projects.graphVersion }).from(projects)
         .where(and(eq(projects.organizationId, input.context.organizationId), eq(projects.id, input.batch.projectId))).limit(1).for('update');
@@ -213,7 +212,7 @@ export class PostgresWorkItemGenerationRepository implements WorkItemGenerationR
         action: 'WORK_ITEM_DRAFT_GENERATED', targetType: 'WorkItemGeneration', targetId: input.id, requestId: input.requestId,
         metadata: { projectId: input.batch.projectId, sourceGraphVersion: input.batch.sourceGraphVersion, contentHash, workItemCount: versionedItems.length, evaluatorVersion: input.qualityReport.evaluatorVersion, sessionId: input.context.sessionId }
       });
-      await transaction.update(idempotencyRecords).set({ status: 'COMPLETED', responseStatus: 201, responsePayload: preview, updatedAt: generatedAt }).where(eq(idempotencyRecords.id, reservation.id));
+      await completePostgresIdempotency(transaction, { recordId: reservation.recordId, responseStatus: 201, responsePayload: preview, completedAt: generatedAt });
       return preview;
     });
   }

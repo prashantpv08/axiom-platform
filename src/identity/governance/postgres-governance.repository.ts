@@ -6,8 +6,11 @@ import { and, desc, eq, inArray, lt, or, sql, type SQL } from 'drizzle-orm';
 import type { AxiomDatabase } from '../../database/client';
 import { DATABASE } from '../../database/database.module';
 import {
+  claimPostgresIdempotency,
+  completePostgresIdempotency
+} from '../../database/idempotency/postgres-idempotency';
+import {
   auditEvents,
-  idempotencyRecords,
   memberships,
   organizationInvitations,
   organizations,
@@ -121,39 +124,19 @@ export class PostgresGovernanceRepository implements GovernanceRepository {
   async createInvitation(input: CreateInvitationInput) {
     return this.database.transaction(async (transaction) => {
       const now = new Date().toISOString();
-      const idempotencyExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
-      const [reservation] = await transaction
-        .insert(idempotencyRecords)
-        .values({
-          id: `IDEMP-${randomUUID()}`,
-          organizationId: input.context.organizationId,
-          scope: 'INVITATION_CREATE',
-          key: input.idempotencyKey,
-          requestHash: input.requestHash,
-          expiresAt: idempotencyExpiresAt
-        })
-        .onConflictDoNothing()
-        .returning({ id: idempotencyRecords.id });
-
-      if (reservation === undefined) {
-        const [existing] = await transaction
-          .select()
-          .from(idempotencyRecords)
-          .where(
-            and(
-              eq(idempotencyRecords.organizationId, input.context.organizationId),
-              eq(idempotencyRecords.scope, 'INVITATION_CREATE'),
-              eq(idempotencyRecords.key, input.idempotencyKey)
-            )
-          )
-          .limit(1)
-          .for('update');
-        if (existing === undefined || existing.requestHash !== input.requestHash) {
-          throw new GovernanceConflictError('Idempotency key was already used for a different request');
-        }
-        if (existing.status === 'COMPLETED' && existing.responsePayload !== null) {
-          return { invitation: InvitationResponseSchema.parse(existing.responsePayload), replayed: true };
-        }
+      const reservation = await claimPostgresIdempotency(transaction, {
+        organizationId: input.context.organizationId,
+        scope: 'INVITATION_CREATE',
+        key: input.idempotencyKey,
+        requestHash: input.requestHash
+      });
+      if (reservation.kind === 'HASH_CONFLICT') {
+        throw new GovernanceConflictError('Idempotency key was already used for a different request');
+      }
+      if (reservation.kind === 'REPLAY') {
+        return { invitation: InvitationResponseSchema.parse(reservation.responsePayload), replayed: true };
+      }
+      if (reservation.kind === 'IN_PROGRESS') {
         throw new GovernanceConflictError('Invitation creation is still processing');
       }
 
@@ -227,10 +210,12 @@ export class PostgresGovernanceRepository implements GovernanceRepository {
         });
       }
 
-      await transaction
-        .update(idempotencyRecords)
-        .set({ status: 'COMPLETED', responseStatus: 201, responsePayload: invitation, updatedAt: now })
-        .where(eq(idempotencyRecords.id, reservation.id));
+      await completePostgresIdempotency(transaction, {
+        recordId: reservation.recordId,
+        responseStatus: 201,
+        responsePayload: invitation,
+        completedAt: now
+      });
       return { invitation, replayed };
     });
   }

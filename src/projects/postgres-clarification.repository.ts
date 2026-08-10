@@ -6,9 +6,12 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { AxiomDatabase } from '../database/client';
 import { DATABASE } from '../database/database.module';
 import {
+  claimPostgresIdempotency,
+  completePostgresIdempotency
+} from '../database/idempotency/postgres-idempotency';
+import {
   auditEvents,
   clarificationQuestions,
-  idempotencyRecords,
   knowledgeEntities,
   projectGaps,
   projectGraphs,
@@ -36,26 +39,19 @@ export class PostgresClarificationRepository implements ClarificationRepository 
 
   async answer(organizationId: string, input: AnswerClarificationInput) {
     return this.database.transaction(async (transaction) => {
-      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
-      const [reservation] = await transaction.insert(idempotencyRecords).values({
-        id: `IDEMP-${randomUUID()}`,
+      const reservation = await claimPostgresIdempotency(transaction, {
         organizationId,
         scope: 'CLARIFICATION_ANSWER',
         key: input.idempotencyKey,
-        requestHash: input.requestHash,
-        expiresAt
-      }).onConflictDoNothing().returning({ id: idempotencyRecords.id });
-
-      if (reservation === undefined) {
-        const [existing] = await transaction.select().from(idempotencyRecords).where(and(
-          eq(idempotencyRecords.organizationId, organizationId),
-          eq(idempotencyRecords.scope, 'CLARIFICATION_ANSWER'),
-          eq(idempotencyRecords.key, input.idempotencyKey)
-        )).limit(1).for('update');
-        if (existing === undefined || existing.requestHash !== input.requestHash) throw new ClarificationIdempotencyConflictError('Idempotency key was used for another clarification answer');
-        if (existing.status === 'COMPLETED' && existing.responsePayload !== null) {
-          return ClarificationAnswerResponseSchema.parse({ ...existing.responsePayload, replayed: true });
-        }
+        requestHash: input.requestHash
+      });
+      if (reservation.kind === 'HASH_CONFLICT') {
+        throw new ClarificationIdempotencyConflictError('Idempotency key was used for another clarification answer');
+      }
+      if (reservation.kind === 'REPLAY') {
+        return ClarificationAnswerResponseSchema.parse({ ...reservation.responsePayload, replayed: true });
+      }
+      if (reservation.kind === 'IN_PROGRESS') {
         throw new ClarificationInProgressError('Clarification answer with this idempotency key is still processing');
       }
 
@@ -208,12 +204,12 @@ export class PostgresClarificationRepository implements ClarificationRepository 
           sessionId: input.sessionId
         }
       });
-      await transaction.update(idempotencyRecords).set({
-        status: 'COMPLETED',
+      await completePostgresIdempotency(transaction, {
+        recordId: reservation.recordId,
         responseStatus: 200,
         responsePayload: response,
-        updatedAt: answeredAt
-      }).where(eq(idempotencyRecords.id, reservation.id));
+        completedAt: answeredAt
+      });
       return response;
     });
   }

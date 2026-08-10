@@ -1,16 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import {
-  BadRequestException,
-  ConflictException,
-  HttpException,
-  HttpStatus,
   Inject,
-  Injectable,
-  NotFoundException
+  Injectable
 } from '@nestjs/common';
 
 import type { OrganizationAccessContext } from '../identity/identity.schema';
+import { ApplicationError } from '../platform/application/application-error';
 import {
   CreateProjectRequestSchema,
   IdempotencyKeySchema,
@@ -48,7 +44,7 @@ function decodeProjectCursor(value: string): ProjectCursor {
   try {
     return ProjectCursorSchema.parse(JSON.parse(Buffer.from(value, 'base64url').toString('utf8')));
   } catch {
-    throw new BadRequestException('Project cursor is invalid');
+    throw new ApplicationError('INVALID_REQUEST', 'Project cursor is invalid');
   }
 }
 
@@ -60,25 +56,8 @@ function decodeWorkspaceCursor(value: string): WorkspaceCursor {
   try {
     return WorkspaceCursorSchema.parse(JSON.parse(Buffer.from(value, 'base64url').toString('utf8')));
   } catch {
-    throw new BadRequestException('Workspace cursor is invalid');
+    throw new ApplicationError('INVALID_REQUEST', 'Workspace cursor is invalid');
   }
-}
-
-export function projectEtag(project: Pick<ProjectResponse, 'id' | 'rowVersion'>): string {
-  return `"${project.id}:${project.rowVersion}"`;
-}
-
-export function expectedProjectRowVersion(value: unknown, projectId: string): number {
-  if (value === undefined) throw new HttpException('If-Match header is required', 428);
-  if (typeof value !== 'string') throw new BadRequestException('If-Match header is invalid for this project');
-
-  const match = /^"(PROJ-[A-Za-z0-9_-]{1,123}):([1-9][0-9]*)"$/u.exec(value);
-  if (match === null || match[1] !== projectId) {
-    throw new BadRequestException('If-Match header is invalid for this project');
-  }
-  const rowVersion = Number(match[2]);
-  if (!Number.isSafeInteger(rowVersion)) throw new BadRequestException('If-Match header is invalid for this project');
-  return rowVersion;
 }
 
 @Injectable()
@@ -87,7 +66,7 @@ export class ProjectService {
 
   async listWorkspaces(context: OrganizationAccessContext, input: unknown): Promise<WorkspaceListResponse> {
     const query = WorkspaceListQuerySchema.safeParse(input);
-    if (!query.success) throw new BadRequestException('Workspace list query is invalid');
+    if (!query.success) throw new ApplicationError('INVALID_REQUEST', 'Workspace list query is invalid');
 
     const page = await this.repository.listWorkspaces(
       { organizationId: context.organizationId },
@@ -109,7 +88,7 @@ export class ProjectService {
 
   async listProjects(context: OrganizationAccessContext, input: unknown): Promise<ProjectListResponse> {
     const query = ProjectListQuerySchema.safeParse(input);
-    if (!query.success) throw new BadRequestException('Project list query is invalid');
+    if (!query.success) throw new ApplicationError('INVALID_REQUEST', 'Project list query is invalid');
 
     const page = await this.repository.listProjects(
       { organizationId: context.organizationId },
@@ -132,19 +111,19 @@ export class ProjectService {
 
   async getProject(context: OrganizationAccessContext, input: unknown): Promise<ProjectResponse> {
     const projectId = ProjectIdSchema.safeParse(input);
-    if (!projectId.success) throw new NotFoundException('Project was not found');
+    if (!projectId.success) throw new ApplicationError('NOT_FOUND', 'Project was not found');
 
     const project = await this.repository.findProject({ organizationId: context.organizationId }, projectId.data);
-    if (project === null) throw new NotFoundException('Project was not found');
+    if (project === null) throw new ApplicationError('NOT_FOUND', 'Project was not found');
 
     return ProjectResponseSchema.parse(project);
   }
 
   async getProjectReadiness(context: OrganizationAccessContext, input: unknown) {
     const projectId = ProjectIdSchema.safeParse(input);
-    if (!projectId.success) throw new NotFoundException('Project was not found');
+    if (!projectId.success) throw new ApplicationError('NOT_FOUND', 'Project was not found');
     const readiness = await this.repository.findProjectReadiness({ organizationId: context.organizationId }, projectId.data);
-    if (readiness === null) throw new NotFoundException('Project was not found');
+    if (readiness === null) throw new ApplicationError('NOT_FOUND', 'Project was not found');
     return ProjectReadinessResponseSchema.parse(readiness);
   }
 
@@ -155,9 +134,9 @@ export class ProjectService {
     requestId: string
   ) {
     const request = CreateProjectRequestSchema.safeParse(input);
-    if (!request.success) throw new BadRequestException('Project creation request is invalid');
+    if (!request.success) throw new ApplicationError('INVALID_REQUEST', 'Project creation request is invalid');
     const idempotencyKey = IdempotencyKeySchema.safeParse(idempotencyKeyInput);
-    if (!idempotencyKey.success) throw new BadRequestException('A valid Idempotency-Key header is required');
+    if (!idempotencyKey.success) throw new ApplicationError('INVALID_REQUEST', 'A valid Idempotency-Key header is required');
 
     const requestHash = createHash('sha256')
       .update(JSON.stringify({ name: request.data.name, workspaceId: request.data.workspaceId }), 'utf8')
@@ -177,9 +156,9 @@ export class ProjectService {
         }
       );
     } catch (cause) {
-      if (cause instanceof WorkspaceNotFoundError) throw new NotFoundException(cause.message);
+      if (cause instanceof WorkspaceNotFoundError) throw new ApplicationError('NOT_FOUND', cause.message);
       if (cause instanceof IdempotencyConflictError || cause instanceof ProjectCreationInProgressError) {
-        throw new ConflictException(cause.message);
+        throw new ApplicationError('CONFLICT', cause.message);
       }
       throw cause;
     }
@@ -188,14 +167,12 @@ export class ProjectService {
   async changeProjectLifecycle(
     context: OrganizationAccessContext,
     projectIdInput: unknown,
-    ifMatchInput: unknown,
+    expectedRowVersion: number,
     requestId: string,
     action: ProjectLifecycleAction
   ): Promise<ProjectResponse> {
     const projectId = ProjectIdSchema.safeParse(projectIdInput);
-    if (!projectId.success) throw new NotFoundException('Project was not found');
-    const expectedRowVersion = expectedProjectRowVersion(ifMatchInput, projectId.data);
-
+    if (!projectId.success) throw new ApplicationError('NOT_FOUND', 'Project was not found');
     try {
       return await this.repository.changeProjectLifecycle(
         { organizationId: context.organizationId },
@@ -209,11 +186,11 @@ export class ProjectService {
         }
       );
     } catch (cause) {
-      if (cause instanceof ProjectNotFoundError) throw new NotFoundException(cause.message);
+      if (cause instanceof ProjectNotFoundError) throw new ApplicationError('NOT_FOUND', cause.message);
       if (cause instanceof ProjectVersionConflictError) {
-        throw new HttpException(cause.message, HttpStatus.PRECONDITION_FAILED);
+        throw new ApplicationError('PRECONDITION_FAILED', cause.message);
       }
-      if (cause instanceof ProjectLifecycleConflictError) throw new ConflictException(cause.message);
+      if (cause instanceof ProjectLifecycleConflictError) throw new ApplicationError('CONFLICT', cause.message);
       throw cause;
     }
   }

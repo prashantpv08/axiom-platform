@@ -10,9 +10,11 @@ import {
   type AuthenticateSubscriptionWebhookInput,
   type SubscriptionProviderAdapter
 } from './subscription-provider.adapter';
-import { SubscriptionProviderEventSchema } from './subscription-webhook.schema';
+import {
+  SUBSCRIPTION_WEBHOOK_SIGNATURE_PATTERN,
+  SubscriptionProviderEventSchema
+} from './subscription-webhook.schema';
 
-const SIGNATURE_PATTERN = /^t=([0-9]{10}),v1=([a-f0-9]{64})$/u;
 const MAX_BODY_BYTES = 64 * 1_024;
 const SIGNATURE_TOLERANCE_SECONDS = 300;
 
@@ -36,7 +38,9 @@ export class LocalFixtureSubscriptionAdapter implements SubscriptionProviderAdap
     if (input.rawBody.byteLength === 0 || input.rawBody.byteLength > MAX_BODY_BYTES) {
       throw new SubscriptionWebhookPayloadError();
     }
-    const signature = input.signatureHeader === undefined ? null : SIGNATURE_PATTERN.exec(input.signatureHeader);
+    const signature = input.signatureHeader === undefined
+      ? null
+      : SUBSCRIPTION_WEBHOOK_SIGNATURE_PATTERN.exec(input.signatureHeader);
     if (signature === null) throw new SubscriptionWebhookAuthenticationError();
 
     const timestampSeconds = Number(signature[1]!);

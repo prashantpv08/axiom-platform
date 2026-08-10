@@ -5,7 +5,11 @@ import { and, desc, eq, lt, or, sql, type SQL } from 'drizzle-orm';
 
 import { DATABASE } from '../database/database.module';
 import type { AxiomDatabase } from '../database/client';
-import { auditEvents, idempotencyRecords, projectGraphs, projects, workspaces } from '../database/schema';
+import {
+  claimPostgresIdempotency,
+  completePostgresIdempotency
+} from '../database/idempotency/postgres-idempotency';
+import { auditEvents, projectGraphs, projects, workspaces } from '../database/schema';
 import { ProjectReadinessResponseSchema, ProjectResponseSchema, WorkspaceResponseSchema } from './project.schema';
 import { transitionProjectLifecycle } from './project.lifecycle';
 import {
@@ -182,43 +186,17 @@ export class PostgresProjectRepository implements ProjectRepository {
 
   async createProject(scope: ProjectScope, input: ProjectCreationInput) {
     return this.database.transaction(async (transaction) => {
-      const now = new Date();
-      const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1_000).toISOString();
-      const [reservation] = await transaction
-        .insert(idempotencyRecords)
-        .values({
-          id: `IDEMP-${randomUUID()}`,
-          organizationId: scope.organizationId,
-          scope: 'PROJECT_CREATE',
-          key: input.idempotencyKey,
-          requestHash: input.requestHash,
-          expiresAt
-        })
-        .onConflictDoNothing()
-        .returning({ id: idempotencyRecords.id });
-
-      if (reservation === undefined) {
-        const [existing] = await transaction
-          .select()
-          .from(idempotencyRecords)
-          .where(
-            and(
-              eq(idempotencyRecords.organizationId, scope.organizationId),
-              eq(idempotencyRecords.scope, 'PROJECT_CREATE'),
-              eq(idempotencyRecords.key, input.idempotencyKey)
-            )
-          )
-          .limit(1)
-          .for('update');
-
-        if (existing === undefined || existing.requestHash !== input.requestHash) {
-          throw new IdempotencyConflictError();
-        }
-        if (existing.status === 'COMPLETED' && existing.responsePayload !== null) {
-          return { project: ProjectResponseSchema.parse(existing.responsePayload), replayed: true };
-        }
-        throw new ProjectCreationInProgressError();
+      const reservation = await claimPostgresIdempotency(transaction, {
+        organizationId: scope.organizationId,
+        scope: 'PROJECT_CREATE',
+        key: input.idempotencyKey,
+        requestHash: input.requestHash
+      });
+      if (reservation.kind === 'HASH_CONFLICT') throw new IdempotencyConflictError();
+      if (reservation.kind === 'REPLAY') {
+        return { project: ProjectResponseSchema.parse(reservation.responsePayload), replayed: true };
       }
+      if (reservation.kind === 'IN_PROGRESS') throw new ProjectCreationInProgressError();
 
       const [workspace] = await transaction
         .select({ id: workspaces.id })
@@ -265,15 +243,12 @@ export class PostgresProjectRepository implements ProjectRepository {
           sessionId: input.sessionId
         }
       });
-      await transaction
-        .update(idempotencyRecords)
-        .set({
-          status: 'COMPLETED',
-          responseStatus: 201,
-          responsePayload: project,
-          updatedAt: new Date().toISOString()
-        })
-        .where(eq(idempotencyRecords.id, reservation.id));
+      await completePostgresIdempotency(transaction, {
+        recordId: reservation.recordId,
+        responseStatus: 201,
+        responsePayload: project,
+        completedAt: new Date().toISOString()
+      });
 
       return { project, replayed: false };
     });

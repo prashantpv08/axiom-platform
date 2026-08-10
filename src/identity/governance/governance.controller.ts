@@ -6,8 +6,10 @@ import { requireAccessContext, requirePrincipal, type AuthenticatedRequest } fro
 import { Authenticated } from '../access/authenticated.decorator';
 import { INVITATION_MANAGE, MEMBER_READ } from '../access/permissions';
 import { RequirePermission } from '../access/require-permission.decorator';
-import type { InvitationResponse } from './governance.schema';
-import { GovernanceService, invitationEtag } from './governance.service';
+import { ApplicationError } from '../../platform/application/application-error';
+import { formatStrongEntityTag, parseRequiredVersionIfMatch } from '../../platform/http/entity-tag';
+import { InvitationIdSchema, type InvitationResponse } from './governance.schema';
+import { GovernanceService } from './governance.service';
 
 @ApiTags('organization-governance')
 @ApiBearerAuth('session-bearer')
@@ -58,13 +60,20 @@ export class GovernanceController {
     @Headers('if-match') ifMatch: unknown,
     @Res({ passthrough: true }) reply: FastifyReply
   ): Promise<InvitationResponse> {
+    const parsedInvitationId = InvitationIdSchema.safeParse(invitationId);
+    if (!parsedInvitationId.success) throw new ApplicationError('NOT_FOUND', 'Invitation was not found');
+    const expectedRowVersion = parseRequiredVersionIfMatch(
+      ifMatch,
+      parsedInvitationId.data,
+      'If-Match header is invalid for this invitation'
+    );
     const invitation = await this.service.revokeInvitation(
       requireAccessContext(request),
-      invitationId,
-      ifMatch,
+      parsedInvitationId.data,
+      expectedRowVersion,
       request.id
     );
-    void reply.header('ETag', invitationEtag(invitation));
+    void reply.header('ETag', formatStrongEntityTag(invitation.id, invitation.rowVersion));
     return invitation;
   }
 }
