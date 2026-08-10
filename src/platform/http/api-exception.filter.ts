@@ -1,7 +1,21 @@
 import { Catch, HttpException, HttpStatus, type ArgumentsHost, type ExceptionFilter } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
+import { ApplicationError, type ApplicationErrorKind } from '../application/application-error';
 import { ApiErrorSchema } from './api-error.schema';
+
+const applicationStatus: Readonly<Record<ApplicationErrorKind, number>> = {
+  INVALID_REQUEST: HttpStatus.BAD_REQUEST,
+  UNAUTHENTICATED: HttpStatus.UNAUTHORIZED,
+  PAYMENT_REQUIRED: HttpStatus.PAYMENT_REQUIRED,
+  NOT_FOUND: HttpStatus.NOT_FOUND,
+  CONFLICT: HttpStatus.CONFLICT,
+  PRECONDITION_FAILED: HttpStatus.PRECONDITION_FAILED,
+  PRECONDITION_REQUIRED: 428,
+  UNPROCESSABLE: HttpStatus.UNPROCESSABLE_ENTITY,
+  UPSTREAM_FAILURE: HttpStatus.BAD_GATEWAY,
+  UNAVAILABLE: HttpStatus.SERVICE_UNAVAILABLE
+};
 
 function errorCode(status: number): string {
   if (status === HttpStatus.NOT_FOUND) return 'NOT_FOUND';
@@ -16,6 +30,7 @@ function errorCode(status: number): string {
 }
 
 function safeCode(exception: unknown, status: number): string {
+  if (exception instanceof ApplicationError) return exception.code ?? errorCode(status);
   if (!(exception instanceof HttpException)) return errorCode(status);
   const response = exception.getResponse();
   if (typeof response !== 'object' || response === null || !('code' in response)) return errorCode(status);
@@ -24,6 +39,9 @@ function safeCode(exception: unknown, status: number): string {
 }
 
 function safeDetails(exception: unknown): Record<string, unknown> | undefined {
+  if (exception instanceof ApplicationError) {
+    return exception.details === undefined ? undefined : { ...exception.details };
+  }
   if (!(exception instanceof HttpException)) return undefined;
   const response = exception.getResponse();
   if (typeof response !== 'object' || response === null || !('details' in response)) return undefined;
@@ -33,6 +51,7 @@ function safeDetails(exception: unknown): Record<string, unknown> | undefined {
 
 function safeMessage(exception: unknown, status: number): string {
   if (status >= 500) return 'An unexpected error occurred';
+  if (exception instanceof ApplicationError) return exception.message;
   if (!(exception instanceof HttpException)) return 'The request could not be completed';
 
   const response = exception.getResponse();
@@ -56,7 +75,9 @@ export class ApiExceptionFilter implements ExceptionFilter {
     const http = host.switchToHttp();
     const request = http.getRequest<FastifyRequest>();
     const reply = http.getResponse<FastifyReply>();
-    const status = exception instanceof HttpException ? exception.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
+    const status = exception instanceof ApplicationError
+      ? applicationStatus[exception.kind]
+      : exception instanceof HttpException ? exception.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
 
     const body = ApiErrorSchema.parse({
       error: {
