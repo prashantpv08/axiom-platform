@@ -34,7 +34,9 @@ import {
   BusinessContextBaselineSchema,
   BusinessContextMutationResponseSchema,
   BusinessContextPreviewSchema,
+  ExperienceApplicabilityDecisionResponseSchema,
   GenerateBusinessContextRequestSchema,
+  ResolveExperienceApplicabilityRequestSchema,
   ReviewBusinessContextRequestSchema
 } from '../../experience/business-context.schema';
 import { HealthResponseSchema } from '../../health/health.schema';
@@ -158,6 +160,7 @@ export const openApiOperationContracts = {
   getCurrentBusinessContext: { response: BusinessContextBaselineSchema, successStatus: 200 },
   generateBusinessContext: { request: GenerateBusinessContextRequestSchema, response: BusinessContextMutationResponseSchema, successStatus: 201, headers: projectMutationHeaders },
   reviewBusinessContext: { request: ReviewBusinessContextRequestSchema, response: BusinessContextMutationResponseSchema, successStatus: 201, headers: projectMutationHeaders },
+  resolveExperienceApplicability: { request: ResolveExperienceApplicabilityRequestSchema, response: ExperienceApplicabilityDecisionResponseSchema, successStatus: 201, headers: projectMutationHeaders },
   getCurrentArtifactBaseline: { response: ArtifactBaselineSchema, successStatus: 200 },
   generateRequirementBaseline: { request: GenerateArtifactsRequestSchema, response: ArtifactGenerationResponseSchema, successStatus: 201, headers: projectMutationHeaders },
   approveRequirementBaseline: { request: ApproveArtifactsRequestSchema, response: ArtifactApprovalResponseSchema, successStatus: 201, headers: projectMutationHeaders },
