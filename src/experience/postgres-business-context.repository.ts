@@ -10,12 +10,15 @@ import {
   auditEvents,
   businessContextReviews,
   businessContextVersions,
+  clarificationQuestions,
+  experienceApplicabilityDecisions,
   knowledgeEntities,
   projectGaps,
   projectGraphs,
   projects
 } from '../database/schema';
 import { isCriticalProjectGap } from '../projects/project-gap.policy';
+import { calculateProjectReadiness } from '../projects/project-readiness.policy';
 import { ProjectResponseSchema } from '../projects/project.schema';
 import { compileBusinessContext } from './business-context.compiler';
 import {
@@ -26,7 +29,8 @@ import {
   type BusinessContextGenerationInput,
   type BusinessContextRepository,
   type BusinessContextReviewInput,
-  type BusinessContextSnapshot
+  type BusinessContextSnapshot,
+  type ExperienceApplicabilityDecisionInput
 } from './business-context.repository';
 import {
   BusinessContextBaselineSchema,
@@ -34,6 +38,8 @@ import {
   BusinessContextReviewSchema,
   BusinessContextTruthStatusSchema,
   BusinessContextVersionSchema,
+  ExperienceApplicabilityDecisionResponseSchema,
+  ExperienceApplicabilityDecisionSchema,
   type BusinessContextBaseline,
   type BusinessContextReview,
   type BusinessContextVersion
@@ -259,6 +265,189 @@ export class PostgresBusinessContextRepository implements BusinessContextReposit
         responseStatus: 201,
         responsePayload: response,
         completedAt: generatedAt
+      });
+      return response;
+    });
+  }
+
+  async resolveApplicability(input: ExperienceApplicabilityDecisionInput) {
+    return this.database.transaction(async (transaction) => {
+      const reservation = await claimPostgresIdempotency(transaction, {
+        organizationId: input.context.organizationId,
+        scope: 'EXPERIENCE_APPLICABILITY_DECIDE',
+        key: input.idempotencyKey,
+        requestHash: input.requestHash
+      });
+      if (reservation.kind === 'HASH_CONFLICT') throw new BusinessContextConflictError('Idempotency key was used for another experience applicability decision');
+      if (reservation.kind === 'REPLAY') return ExperienceApplicabilityDecisionResponseSchema.parse({ ...reservation.responsePayload, replayed: true });
+      if (reservation.kind === 'IN_PROGRESS') throw new BusinessContextConflictError('Experience applicability decision with this idempotency key is still processing');
+
+      const [project] = await transaction.select().from(projects).where(and(
+        eq(projects.organizationId, input.context.organizationId),
+        eq(projects.id, input.projectId)
+      )).limit(1).for('update');
+      if (project === undefined) throw new BusinessContextNotFoundError('Project was not found');
+      if (project.rowVersion !== input.expectedRowVersion) throw new BusinessContextVersionConflictError('Project changed before the experience applicability decision');
+      if (project.status === 'ARCHIVED' || project.graphVersion < 1 || project.graphVersion !== input.sourceGraphVersion) {
+        throw new BusinessContextBlockedError('Experience applicability requires the exact current active graph');
+      }
+
+      const [currentGraph] = await transaction.select().from(projectGraphs).where(and(
+        eq(projectGraphs.organizationId, input.context.organizationId),
+        eq(projectGraphs.projectId, input.projectId),
+        eq(projectGraphs.graphVersion, input.sourceGraphVersion)
+      )).limit(1);
+      if (currentGraph === undefined) throw new BusinessContextBlockedError('Analyze the current project sources before deciding experience applicability');
+      const gaps = await transaction.select().from(projectGaps).where(and(
+        eq(projectGaps.organizationId, input.context.organizationId),
+        eq(projectGaps.projectId, input.projectId),
+        eq(projectGaps.graphVersion, input.sourceGraphVersion)
+      ));
+      const questions = await transaction.select().from(clarificationQuestions).where(and(
+        eq(clarificationQuestions.organizationId, input.context.organizationId),
+        eq(clarificationQuestions.projectId, input.projectId),
+        eq(clarificationQuestions.graphVersion, input.sourceGraphVersion)
+      ));
+      const entities = await transaction.select().from(knowledgeEntities).where(and(
+        eq(knowledgeEntities.organizationId, input.context.organizationId),
+        eq(knowledgeEntities.projectId, input.projectId),
+        eq(knowledgeEntities.graphVersion, input.sourceGraphVersion)
+      )).orderBy(asc(knowledgeEntities.position));
+      const currentPreview = compileBusinessContext({
+        projectId: input.projectId,
+        graphVersion: input.sourceGraphVersion,
+        analyzedAt: new Date(currentGraph.analyzedAt).toISOString(),
+        entities: entities.map((entity) => ({
+          id: entity.id,
+          category: entity.category,
+          text: entity.text,
+          truthStatus: BusinessContextTruthStatusSchema.parse(entity.truthStatus),
+          sourceId: entity.sourceId
+        })),
+        blockingGapIds: gaps.filter(isCriticalProjectGap).map((gap) => gap.id)
+      });
+      if (currentPreview.contentHash !== input.previewContentHash) throw new BusinessContextVersionConflictError('Business Context preview changed before the experience applicability decision');
+      if (currentPreview.applicability.status !== 'NEEDS_DECISION') throw new BusinessContextConflictError('Experience applicability is already explicit in the current graph');
+
+      const decidedAt = new Date().toISOString();
+      const nextGraphVersion = input.sourceGraphVersion + 1;
+      const decisionEntityId = `DECISION-EXPERIENCE-APPLICABILITY-${input.projectId}`;
+      const carriedEntities = entities
+        .filter((entity) => entity.id !== decisionEntityId)
+        .map((entity) => ({ ...entity, graphVersion: nextGraphVersion }));
+      const decisionEntity = {
+        id: decisionEntityId,
+        organizationId: input.context.organizationId,
+        projectId: input.projectId,
+        graphVersion: nextGraphVersion,
+        category: 'DECISION',
+        text: input.decision === 'APPLICABLE'
+          ? 'Human-confirmed decision: this scope requires a user interface.'
+          : 'Human-confirmed decision: this scope is API-only with no user interface.',
+        truthStatus: 'HUMAN_CONFIRMED',
+        sourceId: null,
+        clarificationQuestionId: null,
+        quote: null,
+        startOffset: null,
+        endOffset: null,
+        position: entities.reduce((maximum, entity) => Math.max(maximum, entity.position), -1) + 1
+      };
+      const nextGaps = gaps.map((gap) => ({ ...gap, graphVersion: nextGraphVersion }));
+      const nextQuestions = questions.map((question) => ({ ...question, graphVersion: nextGraphVersion }));
+      const readiness = calculateProjectReadiness({ entities: [...carriedEntities, decisionEntity], gaps: nextGaps, calculatedAt: decidedAt });
+      const nextStatus = nextGaps.some(isCriticalProjectGap) ? 'NEEDS_CLARIFICATION' as const : 'ANALYZED' as const;
+
+      await transaction.insert(projectGraphs).values({
+        organizationId: input.context.organizationId,
+        projectId: input.projectId,
+        graphVersion: nextGraphVersion,
+        summary: currentGraph.summary,
+        readiness,
+        analyzer: 'axiom-human-experience-applicability-v1',
+        analyzedAt: decidedAt
+      });
+      if (nextGaps.length > 0) await transaction.insert(projectGaps).values(nextGaps);
+      if (nextQuestions.length > 0) await transaction.insert(clarificationQuestions).values(nextQuestions);
+      if (carriedEntities.length > 0) await transaction.insert(knowledgeEntities).values(carriedEntities);
+      await transaction.insert(knowledgeEntities).values(decisionEntity);
+
+      const decision = ExperienceApplicabilityDecisionSchema.parse({
+        id: `EAD-${randomUUID()}`,
+        projectId: input.projectId,
+        previousGraphVersion: input.sourceGraphVersion,
+        graphVersion: nextGraphVersion,
+        decision: input.decision,
+        rationale: input.rationale,
+        sourcePreviewContentHash: input.previewContentHash,
+        truthStatus: 'HUMAN_CONFIRMED',
+        decidedByUserId: input.context.userId,
+        decidedAt
+      });
+      await transaction.insert(experienceApplicabilityDecisions).values({
+        id: decision.id,
+        organizationId: input.context.organizationId,
+        projectId: decision.projectId,
+        previousGraphVersion: decision.previousGraphVersion,
+        graphVersion: decision.graphVersion,
+        decision: decision.decision,
+        rationale: decision.rationale,
+        sourcePreviewContentHash: decision.sourcePreviewContentHash,
+        truthStatus: decision.truthStatus,
+        decidedByUserId: decision.decidedByUserId,
+        decidedAt: decision.decidedAt
+      });
+
+      const [updated] = await transaction.update(projects).set({
+        graphVersion: nextGraphVersion,
+        status: nextStatus,
+        rowVersion: sql`${projects.rowVersion} + 1`,
+        updatedAt: decidedAt
+      }).where(and(
+        eq(projects.organizationId, input.context.organizationId),
+        eq(projects.id, input.projectId),
+        eq(projects.rowVersion, input.expectedRowVersion)
+      )).returning();
+      if (updated === undefined) throw new BusinessContextVersionConflictError('Project changed before the experience applicability decision');
+
+      const preview = compileBusinessContext({
+        projectId: input.projectId,
+        graphVersion: nextGraphVersion,
+        analyzedAt: decidedAt,
+        entities: [...carriedEntities, decisionEntity].map((entity) => ({
+          id: entity.id,
+          category: entity.category,
+          text: entity.text,
+          truthStatus: BusinessContextTruthStatusSchema.parse(entity.truthStatus),
+          sourceId: entity.sourceId
+        })),
+        blockingGapIds: nextGaps.filter(isCriticalProjectGap).map((gap) => gap.id)
+      });
+      const response = ExperienceApplicabilityDecisionResponseSchema.parse({ project: projectResponse(updated), decision, preview, replayed: false });
+      await transaction.insert(auditEvents).values({
+        id: `AUDIT-${randomUUID()}`,
+        organizationId: input.context.organizationId,
+        actorUserId: input.context.userId,
+        action: 'EXPERIENCE_APPLICABILITY_DECIDED',
+        targetType: 'ExperienceApplicabilityDecision',
+        targetId: decision.id,
+        requestId: input.requestId,
+        metadata: {
+          projectId: input.projectId,
+          previousGraphVersion: input.sourceGraphVersion,
+          graphVersion: nextGraphVersion,
+          previousProjectStatus: project.status,
+          projectStatus: nextStatus,
+          decision: input.decision,
+          sourcePreviewContentHash: input.previewContentHash,
+          rationaleHash: createHash('sha256').update(input.rationale, 'utf8').digest('hex'),
+          sessionId: input.context.sessionId
+        }
+      });
+      await completePostgresIdempotency(transaction, {
+        recordId: reservation.recordId,
+        responseStatus: 201,
+        responsePayload: response,
+        completedAt: decidedAt
       });
       return response;
     });

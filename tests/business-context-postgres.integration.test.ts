@@ -5,6 +5,7 @@ import { createDatabaseHandle, type DatabaseHandle } from '../src/database/clien
 import { migrateDatabase } from '../src/database/migrate';
 import {
   auditEvents,
+  experienceApplicabilityDecisions,
   knowledgeEntities,
   memberships,
   organizations,
@@ -23,6 +24,7 @@ import { BusinessContextService } from '../src/experience/business-context.servi
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 const describePostgres = testDatabaseUrl === undefined ? describe.skip : describe;
 const OWNER_TOKEN = 'b'.repeat(43);
+const VIEWER_TOKEN = 'v'.repeat(43);
 
 describePostgres('PostgreSQL Business Context preview boundary', () => {
   let database: DatabaseHandle;
@@ -40,9 +42,18 @@ describePostgres('PostgreSQL Business Context preview boundary', () => {
       { id: 'ORG-ALPHA', slug: 'alpha', name: 'Alpha' },
       { id: 'ORG-BETA', slug: 'beta', name: 'Beta' }
     ]);
-    await database.db.insert(users).values({ id: 'USER-OWNER', email: 'owner@example.test', displayName: 'Owner' });
-    await database.db.insert(memberships).values({ organizationId: 'ORG-ALPHA', userId: 'USER-OWNER', role: 'OWNER' });
-    await database.db.insert(sessions).values({ id: 'SESSION-OWNER', userId: 'USER-OWNER', tokenHash: hashSessionToken(OWNER_TOKEN), expiresAt: '2099-01-01T00:00:00.000Z' });
+    await database.db.insert(users).values([
+      { id: 'USER-OWNER', email: 'owner@example.test', displayName: 'Owner' },
+      { id: 'USER-VIEWER', email: 'viewer@example.test', displayName: 'Viewer' }
+    ]);
+    await database.db.insert(memberships).values([
+      { organizationId: 'ORG-ALPHA', userId: 'USER-OWNER', role: 'OWNER' },
+      { organizationId: 'ORG-ALPHA', userId: 'USER-VIEWER', role: 'VIEWER' }
+    ]);
+    await database.db.insert(sessions).values([
+      { id: 'SESSION-OWNER', userId: 'USER-OWNER', tokenHash: hashSessionToken(OWNER_TOKEN), expiresAt: '2099-01-01T00:00:00.000Z' },
+      { id: 'SESSION-VIEWER', userId: 'USER-VIEWER', tokenHash: hashSessionToken(VIEWER_TOKEN), expiresAt: '2099-01-01T00:00:00.000Z' }
+    ]);
     await database.db.insert(workspaces).values({ id: 'WS-ALPHA', organizationId: 'ORG-ALPHA', name: 'Alpha Workspace' });
     await database.db.insert(projects).values([
       { id: 'PROJ-ALPHA', organizationId: 'ORG-ALPHA', workspaceId: 'WS-ALPHA', name: 'Invoice Review', status: 'ANALYZED', graphVersion: 1 },
@@ -88,5 +99,70 @@ describePostgres('PostgreSQL Business Context preview boundary', () => {
     expect(crossTenant.statusCode).toBe(403);
     const notReady = await app!.inject({ method: 'GET', url: '/api/v1/organizations/ORG-ALPHA/projects/PROJ-DRAFT/business-context/preview', headers: { authorization: `Bearer ${OWNER_TOKEN}` } });
     expect(notReady.statusCode).toBe(409);
+  });
+
+  it('creates one audited human-confirmed graph decision with retry-safe exact-preview semantics', async () => {
+    await database.pool.query("update knowledge_entities set text = 'Finance reviewers shall approve invoices.' where project_id = 'PROJ-ALPHA' and id = 'REQ-REVIEW'");
+    const previewResponse = await app!.inject({ method: 'GET', url: '/api/v1/organizations/ORG-ALPHA/projects/PROJ-ALPHA/business-context/preview', headers: { authorization: `Bearer ${OWNER_TOKEN}` } });
+    expect(previewResponse.statusCode, previewResponse.body).toBe(200);
+    const preview = previewResponse.json() as { sourceGraphVersion: number; contentHash: string; applicability: { status: string } };
+    expect(preview.applicability.status).toBe('NEEDS_DECISION');
+
+    const request = {
+      method: 'POST' as const,
+      url: '/api/v1/organizations/ORG-ALPHA/projects/PROJ-ALPHA/business-context/applicability-decisions',
+      headers: { authorization: `Bearer ${OWNER_TOKEN}`, 'if-match': '"PROJ-ALPHA:1"', 'idempotency-key': 'experience-decision-0001' },
+      payload: {
+        sourceGraphVersion: preview.sourceGraphVersion,
+        previewContentHash: preview.contentHash,
+        decision: 'NOT_APPLICABLE',
+        rationale: 'The approved delivery scope is an API integration with no operator-facing experience.'
+      }
+    };
+    const resolved = await app!.inject(request);
+    expect(resolved.statusCode, resolved.body).toBe(201);
+    expect(resolved.headers.etag).toBe('"PROJ-ALPHA:2"');
+    expect(resolved.headers['idempotency-replayed']).toBe('false');
+    expect(resolved.json()).toMatchObject({
+      project: { id: 'PROJ-ALPHA', graphVersion: 2, rowVersion: 2, status: 'NEEDS_CLARIFICATION' },
+      decision: {
+        previousGraphVersion: 1,
+        graphVersion: 2,
+        decision: 'NOT_APPLICABLE',
+        rationale: 'The approved delivery scope is an API integration with no operator-facing experience.',
+        sourcePreviewContentHash: preview.contentHash,
+        truthStatus: 'HUMAN_CONFIRMED',
+        decidedByUserId: 'USER-OWNER'
+      },
+      preview: { sourceGraphVersion: 2, applicability: { status: 'NOT_APPLICABLE', decisionRequired: false } },
+      replayed: false
+    });
+
+    const replay = await app!.inject(request);
+    expect(replay.statusCode, replay.body).toBe(201);
+    expect(replay.headers['idempotency-replayed']).toBe('true');
+    expect(replay.json()).toMatchObject({ replayed: true, decision: { graphVersion: 2 } });
+    expect(await database.db.select().from(experienceApplicabilityDecisions)).toHaveLength(1);
+    expect((await database.db.select().from(auditEvents)).filter((event) => event.action === 'EXPERIENCE_APPLICABILITY_DECIDED')).toHaveLength(1);
+    expect((await database.db.select().from(knowledgeEntities)).filter((entity) => entity.graphVersion === 2 && entity.id === 'DECISION-EXPERIENCE-APPLICABILITY-PROJ-ALPHA')).toHaveLength(1);
+
+    const stale = await app!.inject({ ...request, headers: { ...request.headers, 'idempotency-key': 'experience-decision-0002' } });
+    expect(stale.statusCode, stale.body).toBe(412);
+    const keyConflict = await app!.inject({ ...request, payload: { ...request.payload, decision: 'APPLICABLE' } });
+    expect(keyConflict.statusCode, keyConflict.body).toBe(409);
+  });
+
+  it('refuses anonymous, cross-tenant, and already-explicit applicability mutations', async () => {
+    const previewResponse = await app!.inject({ method: 'GET', url: '/api/v1/organizations/ORG-ALPHA/projects/PROJ-ALPHA/business-context/preview', headers: { authorization: `Bearer ${OWNER_TOKEN}` } });
+    const preview = previewResponse.json() as { sourceGraphVersion: number; contentHash: string };
+    const payload = { sourceGraphVersion: preview.sourceGraphVersion, previewContentHash: preview.contentHash, decision: 'APPLICABLE', rationale: 'The approved scope includes a browser portal for finance reviewers.' };
+    const anonymous = await app!.inject({ method: 'POST', url: '/api/v1/organizations/ORG-ALPHA/projects/PROJ-ALPHA/business-context/applicability-decisions', headers: { 'if-match': '"PROJ-ALPHA:1"', 'idempotency-key': 'experience-denial-0001' }, payload });
+    expect(anonymous.statusCode).toBe(401);
+    const crossTenant = await app!.inject({ method: 'POST', url: '/api/v1/organizations/ORG-BETA/projects/PROJ-ALPHA/business-context/applicability-decisions', headers: { authorization: `Bearer ${OWNER_TOKEN}`, 'if-match': '"PROJ-ALPHA:1"', 'idempotency-key': 'experience-denial-0002' }, payload });
+    expect(crossTenant.statusCode).toBe(403);
+    const viewer = await app!.inject({ method: 'POST', url: '/api/v1/organizations/ORG-ALPHA/projects/PROJ-ALPHA/business-context/applicability-decisions', headers: { authorization: `Bearer ${VIEWER_TOKEN}`, 'if-match': '"PROJ-ALPHA:1"', 'idempotency-key': 'experience-denial-0003' }, payload });
+    expect(viewer.statusCode).toBe(403);
+    const explicit = await app!.inject({ method: 'POST', url: '/api/v1/organizations/ORG-ALPHA/projects/PROJ-ALPHA/business-context/applicability-decisions', headers: { authorization: `Bearer ${OWNER_TOKEN}`, 'if-match': '"PROJ-ALPHA:1"', 'idempotency-key': 'experience-denial-0004' }, payload });
+    expect(explicit.statusCode).toBe(409);
   });
 });
