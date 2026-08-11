@@ -44,11 +44,18 @@ export type BusinessContextReviewInput = BusinessContextMutationInput & Readonly
   proposedGraphChanges: ReadonlyArray<Omit<BusinessContextProposedGraphChange, 'status'>>;
 }>;
 
+export type ExperienceApplicabilityDecisionInput = BusinessContextMutationInput & Readonly<{
+  previewContentHash: string;
+  decision: 'APPLICABLE' | 'NOT_APPLICABLE';
+  rationale: string;
+}>;
+
 export interface BusinessContextRepository {
   findCurrent(organizationId: string, projectId: string): Promise<BusinessContextSnapshot | null>;
   current(organizationId: string, projectId: string): Promise<BusinessContextBaseline | null>;
   generate(input: BusinessContextGenerationInput): Promise<unknown>;
   review(input: BusinessContextReviewInput): Promise<unknown>;
+  resolveApplicability(input: ExperienceApplicabilityDecisionInput): Promise<unknown>;
 }
 
 export class BusinessContextNotFoundError extends Error {}

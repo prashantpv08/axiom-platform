@@ -46,7 +46,7 @@ describe('reviewed OpenAPI contract', () => {
 
   it('registers every unique controller operationId exactly once', () => {
     const operationIds = documentedOperations(document).map(({ operation }) => operation.operationId);
-    expect(operationIds).toHaveLength(42);
+    expect(operationIds).toHaveLength(43);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(operationIds.sort()).toEqual(Object.keys(openApiOperationContracts).sort());
   });

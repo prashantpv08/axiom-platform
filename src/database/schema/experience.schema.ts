@@ -12,7 +12,34 @@ import {
 } from 'drizzle-orm/pg-core';
 import { users } from './identity.schema';
 import { projectGraphs } from './projects.schema';
-import type { BusinessContextPreview, BusinessContextProposedGraphChange } from '../../experience/business-context.schema';
+import type {
+  BusinessContextPreview,
+  BusinessContextProposedGraphChange,
+  ExperienceApplicabilityDecision
+} from '../../experience/business-context.schema';
+
+export const experienceApplicabilityDecisions = pgTable('experience_applicability_decisions', {
+  id: text('id').primaryKey(),
+  organizationId: text('organization_id').notNull(),
+  projectId: text('project_id').notNull(),
+  previousGraphVersion: integer('previous_graph_version').notNull(),
+  graphVersion: integer('graph_version').notNull(),
+  decision: text('decision').$type<ExperienceApplicabilityDecision['decision']>().notNull(),
+  rationale: text('rationale').notNull(),
+  sourcePreviewContentHash: text('source_preview_content_hash').notNull(),
+  truthStatus: text('truth_status').$type<'HUMAN_CONFIRMED'>().notNull(),
+  decidedByUserId: text('decided_by_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  decidedAt: timestamp('decided_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow()
+}, (table) => [
+  uniqueIndex('experience_applicability_decisions_project_graph_uidx').on(table.organizationId, table.projectId, table.graphVersion),
+  uniqueIndex('experience_applicability_decisions_scope_id_uidx').on(table.organizationId, table.projectId, table.id),
+  index('experience_applicability_decisions_project_decided_idx').on(table.organizationId, table.projectId, table.decidedAt, table.id),
+  check('experience_applicability_decisions_graph_check', sql`${table.previousGraphVersion} > 0 and ${table.graphVersion} = ${table.previousGraphVersion} + 1`),
+  check('experience_applicability_decisions_decision_check', sql`${table.decision} in ('APPLICABLE', 'NOT_APPLICABLE')`),
+  check('experience_applicability_decisions_truth_check', sql`${table.truthStatus} = 'HUMAN_CONFIRMED'`),
+  check('experience_applicability_decisions_hash_check', sql`${table.sourcePreviewContentHash} ~ '^[a-f0-9]{64}$'`),
+  foreignKey({ name: 'experience_applicability_decisions_graph_fk', columns: [table.organizationId, table.projectId, table.graphVersion], foreignColumns: [projectGraphs.organizationId, projectGraphs.projectId, projectGraphs.graphVersion] }).onDelete('restrict')
+]);
 
 export const businessContextVersions = pgTable('business_context_versions', {
   id: text('id').primaryKey(),
