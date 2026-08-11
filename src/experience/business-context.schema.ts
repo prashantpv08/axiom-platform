@@ -6,6 +6,7 @@ export const BUSINESS_CONTEXT_COMPILER_VERSION = 'business-context-compiler-v1' 
 
 export const BusinessContextTruthStatusSchema = z.enum(['SOURCE_GROUNDED', 'HUMAN_CONFIRMED']);
 export const ExperienceApplicabilityStatusSchema = z.enum(['APPLICABLE', 'NOT_APPLICABLE', 'NEEDS_DECISION']);
+export const ResolvedExperienceApplicabilityStatusSchema = z.enum(['APPLICABLE', 'NOT_APPLICABLE']);
 export const BusinessContextItemKindSchema = z.enum(['OUTCOME', 'ACTOR', 'WORKFLOW', 'SUCCESS_MEASURE']);
 
 export const BusinessContextItemSchema = z.object({
@@ -156,6 +157,49 @@ export const ReviewBusinessContextRequestSchema = z.object({
   }
 });
 
+export const ResolveExperienceApplicabilityRequestSchema = z.object({
+  sourceGraphVersion: z.number().int().positive(),
+  previewContentHash: z.string().regex(/^[a-f0-9]{64}$/u),
+  decision: ResolvedExperienceApplicabilityStatusSchema,
+  rationale: z.string().trim().min(10).max(2_000)
+}).strict();
+
+export const ExperienceApplicabilityDecisionIdSchema = z.string().regex(/^EAD-[A-Za-z0-9_-]{1,123}$/u);
+
+export const ExperienceApplicabilityDecisionSchema = z.object({
+  id: ExperienceApplicabilityDecisionIdSchema,
+  projectId: ProjectIdSchema,
+  previousGraphVersion: z.number().int().positive(),
+  graphVersion: z.number().int().positive(),
+  decision: ResolvedExperienceApplicabilityStatusSchema,
+  rationale: z.string().min(10).max(2_000),
+  sourcePreviewContentHash: z.string().regex(/^[a-f0-9]{64}$/u),
+  truthStatus: z.literal('HUMAN_CONFIRMED'),
+  decidedByUserId: z.string().min(1).max(160),
+  decidedAt: z.iso.datetime()
+}).strict().superRefine((value, context) => {
+  if (value.graphVersion !== value.previousGraphVersion + 1) {
+    context.addIssue({ code: 'custom', message: 'Experience applicability decision must create the next graph version' });
+  }
+});
+
+export const ExperienceApplicabilityDecisionResponseSchema = z.object({
+  project: ProjectResponseSchema,
+  decision: ExperienceApplicabilityDecisionSchema,
+  preview: BusinessContextPreviewSchema,
+  replayed: z.boolean()
+}).strict().superRefine((value, context) => {
+  if (
+    value.project.id !== value.decision.projectId
+    || value.project.graphVersion !== value.decision.graphVersion
+    || value.preview.projectId !== value.decision.projectId
+    || value.preview.sourceGraphVersion !== value.decision.graphVersion
+    || value.preview.applicability.status !== value.decision.decision
+  ) {
+    context.addIssue({ code: 'custom', message: 'Experience applicability response must describe the exact resulting graph' });
+  }
+});
+
 export const BusinessContextMutationResponseSchema = z.object({
   project: ProjectResponseSchema,
   baseline: BusinessContextBaselineSchema,
@@ -168,3 +212,4 @@ export type BusinessContextVersion = z.infer<typeof BusinessContextVersionSchema
 export type BusinessContextReview = z.infer<typeof BusinessContextReviewSchema>;
 export type BusinessContextBaseline = z.infer<typeof BusinessContextBaselineSchema>;
 export type BusinessContextProposedGraphChange = z.infer<typeof BusinessContextProposedGraphChangeSchema>;
+export type ExperienceApplicabilityDecision = z.infer<typeof ExperienceApplicabilityDecisionSchema>;
