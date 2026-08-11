@@ -7089,6 +7089,676 @@
         ]
       }
     },
+    "/api/v1/organizations/{organizationId}/projects/{projectId}/business-context/applicability-decisions": {
+      "post": {
+        "operationId": "resolveExperienceApplicability",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "pattern": "^[A-Za-z0-9._:-]{8,128}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "pattern": "^\"PROJ-[A-Za-z0-9_-]{1,123}:[1-9][0-9]*\"$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "organizationId",
+            "required": true,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "pattern": "^ORG-[A-Za-z0-9_-]{1,124}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "projectId",
+            "required": true,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "pattern": "^PROJ-[A-Za-z0-9_-]{1,123}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "additionalProperties": false,
+                "properties": {
+                  "decision": {
+                    "enum": [
+                      "APPLICABLE",
+                      "NOT_APPLICABLE"
+                    ],
+                    "type": "string"
+                  },
+                  "previewContentHash": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "rationale": {
+                    "maxLength": 2000,
+                    "minLength": 10,
+                    "type": "string"
+                  },
+                  "sourceGraphVersion": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "sourceGraphVersion",
+                  "previewContentHash",
+                  "decision",
+                  "rationale"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$schema": "https://json-schema.org/draft/2020-12/schema",
+                  "additionalProperties": false,
+                  "properties": {
+                    "decision": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "decidedAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                          "type": "string"
+                        },
+                        "decidedByUserId": {
+                          "maxLength": 160,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "decision": {
+                          "enum": [
+                            "APPLICABLE",
+                            "NOT_APPLICABLE"
+                          ],
+                          "type": "string"
+                        },
+                        "graphVersion": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        },
+                        "id": {
+                          "pattern": "^EAD-[A-Za-z0-9_-]{1,123}$",
+                          "type": "string"
+                        },
+                        "previousGraphVersion": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        },
+                        "projectId": {
+                          "pattern": "^PROJ-[A-Za-z0-9_-]{1,123}$",
+                          "type": "string"
+                        },
+                        "rationale": {
+                          "maxLength": 2000,
+                          "minLength": 10,
+                          "type": "string"
+                        },
+                        "sourcePreviewContentHash": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "truthStatus": {
+                          "const": "HUMAN_CONFIRMED",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "projectId",
+                        "previousGraphVersion",
+                        "graphVersion",
+                        "decision",
+                        "rationale",
+                        "sourcePreviewContentHash",
+                        "truthStatus",
+                        "decidedByUserId",
+                        "decidedAt"
+                      ],
+                      "type": "object"
+                    },
+                    "preview": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "actors": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "id": {
+                                "pattern": "^BC-(?:OUT|ACT|FLOW|MEASURE)-[A-F0-9]{16}$",
+                                "type": "string"
+                              },
+                              "kind": {
+                                "enum": [
+                                  "OUTCOME",
+                                  "ACTOR",
+                                  "WORKFLOW",
+                                  "SUCCESS_MEASURE"
+                                ],
+                                "type": "string"
+                              },
+                              "sourceEntityId": {
+                                "maxLength": 200,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "sourceId": {
+                                "anyOf": [
+                                  {
+                                    "maxLength": 200,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "statement": {
+                                "maxLength": 5000,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "truthStatus": {
+                                "enum": [
+                                  "SOURCE_GROUNDED",
+                                  "HUMAN_CONFIRMED"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "kind",
+                              "statement",
+                              "truthStatus",
+                              "sourceEntityId",
+                              "sourceId"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 1000,
+                          "type": "array"
+                        },
+                        "applicability": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "decisionRequired": {
+                              "type": "boolean"
+                            },
+                            "rationale": {
+                              "maxLength": 2000,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "sourceEntityIds": {
+                              "items": {
+                                "maxLength": 200,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "maxItems": 1000,
+                              "type": "array"
+                            },
+                            "status": {
+                              "enum": [
+                                "APPLICABLE",
+                                "NOT_APPLICABLE",
+                                "NEEDS_DECISION"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "status",
+                            "rationale",
+                            "sourceEntityIds",
+                            "decisionRequired"
+                          ],
+                          "type": "object"
+                        },
+                        "blockingGapIds": {
+                          "items": {
+                            "maxLength": 200,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxItems": 1000,
+                          "type": "array"
+                        },
+                        "compiledAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                          "type": "string"
+                        },
+                        "compilerVersion": {
+                          "const": "business-context-compiler-v1",
+                          "type": "string"
+                        },
+                        "contentHash": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "coverage": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "classifiedEntityCount": {
+                              "maximum": 9007199254740991,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "eligibleEntityCount": {
+                              "maximum": 9007199254740991,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "unclassifiedEntityIds": {
+                              "items": {
+                                "maxLength": 200,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "maxItems": 1000,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "eligibleEntityCount",
+                            "classifiedEntityCount",
+                            "unclassifiedEntityIds"
+                          ],
+                          "type": "object"
+                        },
+                        "outcomes": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "id": {
+                                "pattern": "^BC-(?:OUT|ACT|FLOW|MEASURE)-[A-F0-9]{16}$",
+                                "type": "string"
+                              },
+                              "kind": {
+                                "enum": [
+                                  "OUTCOME",
+                                  "ACTOR",
+                                  "WORKFLOW",
+                                  "SUCCESS_MEASURE"
+                                ],
+                                "type": "string"
+                              },
+                              "sourceEntityId": {
+                                "maxLength": 200,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "sourceId": {
+                                "anyOf": [
+                                  {
+                                    "maxLength": 200,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "statement": {
+                                "maxLength": 5000,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "truthStatus": {
+                                "enum": [
+                                  "SOURCE_GROUNDED",
+                                  "HUMAN_CONFIRMED"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "kind",
+                              "statement",
+                              "truthStatus",
+                              "sourceEntityId",
+                              "sourceId"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 1000,
+                          "type": "array"
+                        },
+                        "projectId": {
+                          "pattern": "^PROJ-[A-Za-z0-9_-]{1,123}$",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": "business-context-preview-v1",
+                          "type": "string"
+                        },
+                        "sourceGraphVersion": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        },
+                        "successMeasures": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "id": {
+                                "pattern": "^BC-(?:OUT|ACT|FLOW|MEASURE)-[A-F0-9]{16}$",
+                                "type": "string"
+                              },
+                              "kind": {
+                                "enum": [
+                                  "OUTCOME",
+                                  "ACTOR",
+                                  "WORKFLOW",
+                                  "SUCCESS_MEASURE"
+                                ],
+                                "type": "string"
+                              },
+                              "sourceEntityId": {
+                                "maxLength": 200,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "sourceId": {
+                                "anyOf": [
+                                  {
+                                    "maxLength": 200,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "statement": {
+                                "maxLength": 5000,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "truthStatus": {
+                                "enum": [
+                                  "SOURCE_GROUNDED",
+                                  "HUMAN_CONFIRMED"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "kind",
+                              "statement",
+                              "truthStatus",
+                              "sourceEntityId",
+                              "sourceId"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 1000,
+                          "type": "array"
+                        },
+                        "unknowns": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "code": {
+                                "enum": [
+                                  "UNKNOWN_BUSINESS_OUTCOME",
+                                  "UNKNOWN_ACTOR",
+                                  "UNKNOWN_OPERATING_WORKFLOW",
+                                  "UNKNOWN_SUCCESS_MEASURE",
+                                  "UNKNOWN_EXPERIENCE_APPLICABILITY"
+                                ],
+                                "type": "string"
+                              },
+                              "question": {
+                                "maxLength": 1000,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "whyItMatters": {
+                                "maxLength": 1000,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "question",
+                              "whyItMatters"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 5,
+                          "type": "array"
+                        },
+                        "workflows": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "id": {
+                                "pattern": "^BC-(?:OUT|ACT|FLOW|MEASURE)-[A-F0-9]{16}$",
+                                "type": "string"
+                              },
+                              "kind": {
+                                "enum": [
+                                  "OUTCOME",
+                                  "ACTOR",
+                                  "WORKFLOW",
+                                  "SUCCESS_MEASURE"
+                                ],
+                                "type": "string"
+                              },
+                              "sourceEntityId": {
+                                "maxLength": 200,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "sourceId": {
+                                "anyOf": [
+                                  {
+                                    "maxLength": 200,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "statement": {
+                                "maxLength": 5000,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "truthStatus": {
+                                "enum": [
+                                  "SOURCE_GROUNDED",
+                                  "HUMAN_CONFIRMED"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "kind",
+                              "statement",
+                              "truthStatus",
+                              "sourceEntityId",
+                              "sourceId"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 1000,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "compilerVersion",
+                        "projectId",
+                        "sourceGraphVersion",
+                        "contentHash",
+                        "compiledAt",
+                        "applicability",
+                        "outcomes",
+                        "actors",
+                        "workflows",
+                        "successMeasures",
+                        "unknowns",
+                        "blockingGapIds",
+                        "coverage"
+                      ],
+                      "type": "object"
+                    },
+                    "project": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "archivedAt": {
+                          "anyOf": [
+                            {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "default": null
+                        },
+                        "createdAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                          "type": "string"
+                        },
+                        "graphVersion": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "id": {
+                          "pattern": "^PROJ-[A-Za-z0-9_-]{1,123}$",
+                          "type": "string"
+                        },
+                        "name": {
+                          "maxLength": 160,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "rowVersion": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        },
+                        "status": {
+                          "enum": [
+                            "DRAFT",
+                            "SOURCES_READY",
+                            "ANALYZED",
+                            "NEEDS_CLARIFICATION",
+                            "DOCUMENTED",
+                            "DOCUMENTS_APPROVED",
+                            "DESIGN_READY",
+                            "ARB_APPROVED",
+                            "HLD_READY",
+                            "PUBLISHED",
+                            "BACKLOG_READY",
+                            "ARCHIVED"
+                          ],
+                          "type": "string"
+                        },
+                        "updatedAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                          "type": "string"
+                        },
+                        "workspaceId": {
+                          "pattern": "^WS-[A-Za-z0-9_-]{1,125}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "workspaceId",
+                        "name",
+                        "status",
+                        "graphVersion",
+                        "rowVersion",
+                        "archivedAt",
+                        "createdAt",
+                        "updatedAt"
+                      ],
+                      "type": "object"
+                    },
+                    "replayed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "project",
+                    "decision",
+                    "preview",
+                    "replayed"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "session-cookie": []
+          },
+          {
+            "session-bearer": []
+          }
+        ],
+        "summary": "Create a human-confirmed graph version from an exact unresolved experience-applicability preview",
+        "tags": [
+          "experience"
+        ]
+      }
+    },
     "/api/v1/organizations/{organizationId}/projects/{projectId}/business-context/current": {
       "get": {
         "operationId": "getCurrentBusinessContext",
