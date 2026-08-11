@@ -75,4 +75,26 @@ export class BusinessContextController {
     void reply.header('Idempotency-Replayed', String(result.replayed));
     return result;
   }
+
+  @Post('applicability-decisions')
+  @HttpCode(201)
+  @Header('Cache-Control', 'no-store')
+  @RequirePermission(EXPERIENCE_REVIEW)
+  @ApiHeader({ name: 'If-Match', required: true })
+  @ApiHeader({ name: 'Idempotency-Key', required: true })
+  @ApiOperation({ operationId: 'resolveExperienceApplicability', summary: 'Create a human-confirmed graph version from an exact unresolved experience-applicability preview' })
+  async resolveApplicability(
+    @Req() request: AuthenticatedRequest,
+    @Param('projectId') projectId: string,
+    @Body() body: unknown,
+    @Headers('if-match') ifMatch: unknown,
+    @Headers('idempotency-key') idempotencyKey: unknown,
+    @Res({ passthrough: true }) reply: FastifyReply
+  ) {
+    const precondition = parseProjectVersionPrecondition(projectId, ifMatch);
+    const result = await this.service.resolveApplicability(requireAccessContext(request), precondition.projectId, body, precondition.expectedRowVersion, idempotencyKey, request.id);
+    void reply.header('ETag', formatStrongEntityTag(result.project.id, result.project.rowVersion));
+    void reply.header('Idempotency-Replayed', String(result.replayed));
+    return result;
+  }
 }

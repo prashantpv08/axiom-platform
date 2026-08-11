@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import * as compatibilitySchema from '../src/database/schema';
 import * as boundedSchema from '../src/database/schema/index';
 
-const EXPECTED_SCHEMA_FINGERPRINT = '154730a48fa52feda879a473657b88e77969b47e7ebf6d2f4faebdb6161cdd1c';
+const EXPECTED_SCHEMA_FINGERPRINT = '0b83945e6215da781c8bc88931769e3e1d379bfc9bc4807bf655f45e1329d33b';
 const dialect = new PgDialect();
 
 function sqlValue(value: unknown): unknown {
@@ -104,11 +104,11 @@ describe('bounded database schema exports', () => {
       primaryKeys: configs.reduce((count, config) => count + config.primaryKeys.length, 0),
       rowLevelSecurityTables: configs.filter((config) => config.enableRLS).length
     }).toEqual({
-      tables: 44,
-      columns: 517,
-      indexes: 62,
-      foreignKeys: 60,
-      checks: 98,
+      tables: 45,
+      columns: 528,
+      indexes: 65,
+      foreignKeys: 62,
+      checks: 102,
       primaryKeys: 11,
       rowLevelSecurityTables: 0
     });
