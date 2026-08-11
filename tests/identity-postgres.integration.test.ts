@@ -215,6 +215,8 @@ describePostgres('PostgreSQL identity and organization boundary', () => {
   it('provides an executable rollback for the identity tables', async () => {
     await app!.close();
     app = undefined;
+    const applicabilityDecisionDownSql = await readFile(resolve('drizzle/0020_experience_applicability_decisions.down.sql'), 'utf8');
+    await database.pool.query(applicabilityDecisionDownSql);
     const businessContextDownSql = await readFile(resolve('drizzle/0019_business_context_versions.down.sql'), 'utf8');
     await database.pool.query(businessContextDownSql);
     const sourceAnalysisDownSql = await readFile(resolve('drizzle/0016_source_analysis_runs.down.sql'), 'utf8');
