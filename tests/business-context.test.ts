@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { compileBusinessContext } from '../src/experience/business-context.compiler';
-import { ReviewBusinessContextRequestSchema } from '../src/experience/business-context.schema';
+import {
+  ResolveExperienceApplicabilityRequestSchema,
+  ReviewBusinessContextRequestSchema
+} from '../src/experience/business-context.schema';
 
 const analyzedAt = '2026-08-03T00:00:00.000Z';
 
@@ -42,6 +45,33 @@ describe('source-linked Business Context preview', () => {
     expect(preview.unknowns.map((unknown) => unknown.code)).toContain('UNKNOWN_EXPERIENCE_APPLICABILITY');
     expect(preview.blockingGapIds).toEqual(['GAP-ACTOR']);
     expect(preview.coverage.unclassifiedEntityIds).toEqual(['CON-REGION']);
+  });
+
+  it('recognizes the bounded human-confirmed applicability statements used by graph decisions', () => {
+    const common = {
+      projectId: 'PROJ-DECIDED', graphVersion: 2, analyzedAt, blockingGapIds: [],
+    };
+    const applicable = compileBusinessContext({
+      ...common,
+      entities: [{ id: 'DECISION-EXPERIENCE-APPLICABILITY-PROJ-DECIDED', category: 'DECISION', text: 'Human-confirmed decision: this scope requires a user interface.', truthStatus: 'HUMAN_CONFIRMED', sourceId: null }]
+    });
+    const notApplicable = compileBusinessContext({
+      ...common,
+      entities: [{ id: 'DECISION-EXPERIENCE-APPLICABILITY-PROJ-DECIDED', category: 'DECISION', text: 'Human-confirmed decision: this scope is API-only with no user interface.', truthStatus: 'HUMAN_CONFIRMED', sourceId: null }]
+    });
+    expect(applicable.applicability).toMatchObject({ status: 'APPLICABLE', decisionRequired: false });
+    expect(notApplicable.applicability).toMatchObject({ status: 'NOT_APPLICABLE', decisionRequired: false });
+  });
+
+  it('requires an exact resolved applicability choice and reviewable rationale', () => {
+    const common = {
+      sourceGraphVersion: 1,
+      previewContentHash: 'a'.repeat(64),
+      rationale: 'The approved scope is an API integration without an operator-facing workflow.'
+    };
+    expect(ResolveExperienceApplicabilityRequestSchema.safeParse({ ...common, decision: 'NOT_APPLICABLE' }).success).toBe(true);
+    expect(ResolveExperienceApplicabilityRequestSchema.safeParse({ ...common, decision: 'NEEDS_DECISION' }).success).toBe(false);
+    expect(ResolveExperienceApplicabilityRequestSchema.safeParse({ ...common, decision: 'APPLICABLE', rationale: 'Too short' }).success).toBe(false);
   });
 
   it('is deterministic for the same current graph', () => {
