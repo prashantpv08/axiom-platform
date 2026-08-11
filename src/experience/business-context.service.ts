@@ -17,7 +17,9 @@ import {
 import {
   BusinessContextBaselineSchema,
   BusinessContextMutationResponseSchema,
+  ExperienceApplicabilityDecisionResponseSchema,
   GenerateBusinessContextRequestSchema,
+  ResolveExperienceApplicabilityRequestSchema,
   ReviewBusinessContextRequestSchema
 } from './business-context.schema';
 
@@ -104,6 +106,38 @@ export class BusinessContextService {
         feedbackCategory: request.data.feedbackCategory,
         comment: request.data.comment,
         proposedGraphChanges: request.data.proposedGraphChanges,
+        expectedRowVersion,
+        idempotencyKey: idempotencyKey.data,
+        requestHash,
+        context,
+        requestId
+      }));
+    } catch (cause) {
+      this.rethrow(cause);
+    }
+  }
+
+  async resolveApplicability(
+    context: OrganizationAccessContext,
+    projectIdInput: unknown,
+    body: unknown,
+    expectedRowVersion: number,
+    idempotencyKeyInput: unknown,
+    requestId: string
+  ) {
+    const projectId = ProjectIdSchema.safeParse(projectIdInput);
+    if (!projectId.success) throw new ApplicationError('NOT_FOUND', 'Project was not found');
+    const request = ResolveExperienceApplicabilityRequestSchema.safeParse(body);
+    const idempotencyKey = IdempotencyKeySchema.safeParse(idempotencyKeyInput);
+    if (!request.success || !idempotencyKey.success) throw new ApplicationError('INVALID_REQUEST', 'Experience applicability decision request is invalid');
+    const requestHash = createHash('sha256').update(JSON.stringify({ projectId: projectId.data, ...request.data, expectedRowVersion }), 'utf8').digest('hex');
+    try {
+      return ExperienceApplicabilityDecisionResponseSchema.parse(await this.repository.resolveApplicability({
+        projectId: projectId.data,
+        sourceGraphVersion: request.data.sourceGraphVersion,
+        previewContentHash: request.data.previewContentHash,
+        decision: request.data.decision,
+        rationale: request.data.rationale,
         expectedRowVersion,
         idempotencyKey: idempotencyKey.data,
         requestHash,
